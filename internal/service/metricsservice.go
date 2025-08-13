@@ -36,3 +36,32 @@ func (s *MetricsService) UpdateMetric(metricType, metricName, metricValue string
 
 	return nil
 }
+
+func (s *MetricsService) GetMetricValue(metricType, metricName string) (interface{}, error) {
+	switch metricType {
+	case model.Counter:
+		counters := s.storage.GetCounters()
+		value, exists := counters[metricName]
+		if !exists {
+			return nil, errors.New("metric not found")
+		}
+		return value, nil
+	case model.Gauge:
+		gauges := s.storage.GetGauges()
+		value, exists := gauges[metricName]
+		if !exists {
+			return nil, errors.New("metric not found")
+		}
+		return value, nil
+	default:
+		return nil, errors.New("invalid metric type")
+	}
+}
+
+func (s *MetricsService) GetGauges() map[string]float64 {
+	return s.storage.GetGauges()
+}
+
+func (s *MetricsService) GetCounters() map[string]int64 {
+	return s.storage.GetCounters()
+}

@@ -26,3 +26,15 @@ func (s *MemStorage) UpdateCounter(name string, value int64) {
 	defer s.mu.Unlock()
 	s.counters[name] += value
 }
+
+func (s *MemStorage) GetGauges() map[string]float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gauges
+}
+
+func (s *MemStorage) GetCounters() map[string]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.counters
+}
