@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 )
 
 func main() {
+	address := flag.String("a", "localhost:8080", "HTTP address to listen on")
+	flag.Parse()
 
 	storage := repository.NewMemStorage()
 	metricsService := service.NewMetricsService(storage)
@@ -24,6 +27,6 @@ func main() {
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
 
-	fmt.Println("Server is running on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	fmt.Printf("Server is running on %s\n", *address)
+	log.Fatal(http.ListenAndServe(*address, r))
 }
