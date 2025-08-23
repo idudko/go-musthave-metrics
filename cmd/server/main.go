@@ -8,8 +8,9 @@ import (
 	"os"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/handler"
+	"github.com/idudko/go-musthave-metrics/internal/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
 	"github.com/idudko/go-musthave-metrics/internal/service"
 )
@@ -28,7 +29,8 @@ func main() {
 	h := handler.NewHandler(metricsService)
 
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(chimiddleware.Logger)
+	r.Use(middleware.LoggingMiddleware)
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
