@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -14,7 +15,12 @@ import (
 )
 
 func main() {
-	address := flag.String("a", "localhost:8080", "HTTP address to listen on")
+	defaultAddress := "localhost:8080"
+	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
+		defaultAddress = envAddress
+	}
+
+	address := flag.String("a", defaultAddress, "HTTP address to listen on")
 	flag.Parse()
 
 	storage := repository.NewMemStorage()
