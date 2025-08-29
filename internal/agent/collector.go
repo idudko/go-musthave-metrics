@@ -1,12 +1,16 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"net/http"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
+	"github.com/idudko/go-musthave-metrics/internal/model"
 )
 
 type Collector struct {
@@ -69,26 +73,40 @@ func (c *Collector) Report(serverAddress string) error {
 	defer c.mu.Unlock()
 
 	for name, value := range c.gauges {
-		url := fmt.Sprintf("http://%s/update/gauge/%s/%f", serverAddress, name, value)
-		if err := sendMetric(url); err != nil {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Gauge,
+			Value: &value,
+		}
+		if err := sendMetricJSON(serverAddress, m); err != nil {
 			return err
 		}
 	}
 	for name, value := range c.counters {
-		url := fmt.Sprintf("http://%s/update/counter/%s/%d", serverAddress, name, value)
-		if err := sendMetric(url); err != nil {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Counter,
+			Delta: &value,
+		}
+		if err := sendMetricJSON(serverAddress, m); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func sendMetric(url string) error {
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+func sendMetricJSON(serverAddress string, m model.Metrics) error {
+	url := fmt.Sprintf("http://%s/update", serverAddress)
+	data, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "text/plain")
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
