@@ -6,4 +6,5 @@ type Storage interface {
 	UpdateCounter(name string, value int64)
 	GetGauges() map[string]float64
 	GetCounters() map[string]int64
+	Save() error
 }

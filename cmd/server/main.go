@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -16,15 +17,49 @@ import (
 )
 
 func main() {
+	// ADDRESS
 	defaultAddress := "localhost:8080"
 	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
 		defaultAddress = envAddress
 	}
 
 	address := flag.String("a", defaultAddress, "HTTP address to listen on")
+
+	// STORE_INTERVAL
+	defaultStoreInterval := 300
+	if envStoreInterval := os.Getenv("STORE_INTERVAL"); envStoreInterval != "" {
+		var err error
+		defaultStoreInterval, err = strconv.Atoi(envStoreInterval)
+		if err != nil {
+			log.Printf("Invalid STORE_INTERVAL env: %v, using default %v", err, defaultStoreInterval)
+		}
+	}
+	storeInterval := flag.Int("i", defaultStoreInterval, "Store interval in seconds (0 = synchronous)")
+
+	// --- FILE_STORAGE_PATH ---
+	defaultFile := "metrics.json"
+	if envFile := os.Getenv("FILE_STORAGE_PATH"); envFile != "" {
+		defaultFile = envFile
+	}
+	file := flag.String("f", defaultFile, "Path to storage file")
+
+	// RESTORE
+	defaultRestore := false
+	if envRestore := os.Getenv("RESTORE"); envRestore != "" {
+		var err error
+		defaultRestore, err = strconv.ParseBool(envRestore)
+		if err != nil {
+			log.Printf("Failed to parse RESTORE environment variable: %v", err)
+		}
+	}
+	restore := flag.Bool("r", defaultRestore, "Restore metrics from file")
 	flag.Parse()
 
-	storage := repository.NewMemStorage()
+	storage, err := repository.NewFileStorage(*file, *storeInterval, *restore)
+	if err != nil {
+		log.Fatalf("Failed to create storage: %v", err)
+	}
+
 	metricsService := service.NewMetricsService(storage)
 	h := handler.NewHandler(metricsService)
 

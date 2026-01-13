@@ -32,6 +32,8 @@ func (s *MetricsService) UpdateMetric(metricType, metricName string, metricValue
 	default:
 		return errors.New("invalid metric type")
 	}
+
+	_ = s.storage.Save()
 	return nil
 }
 

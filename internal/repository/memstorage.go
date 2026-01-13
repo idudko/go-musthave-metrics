@@ -1,6 +1,9 @@
 package repository
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 type MemStorage struct {
 	gauges   map[string]float64
@@ -30,11 +33,15 @@ func (s *MemStorage) UpdateCounter(name string, value int64) {
 func (s *MemStorage) GetGauges() map[string]float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.gauges
+	return maps.Clone(s.gauges)
 }
 
 func (s *MemStorage) GetCounters() map[string]int64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.counters
+	return maps.Clone(s.counters)
+}
+
+func (s *MemStorage) Save() error {
+	return nil
 }
