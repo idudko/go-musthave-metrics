@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -12,6 +14,7 @@ type FileStorage struct {
 	path     string
 	interval time.Duration
 	syncSave bool
+	mu       sync.RWMutex
 }
 
 type storageData struct {
@@ -27,18 +30,20 @@ func NewFileStorage(path string, interval int, restore bool) (*FileStorage, erro
 		syncSave:   interval == 0,
 	}
 
+	ctx := context.Background()
+
 	if restore {
-		if err := fs.restore(); err != nil {
+		if err := fs.restore(ctx); err != nil {
 			log.Printf("Warning: could not restore metrics from file: %v", err)
 		}
 	}
 	if interval > 0 {
-		fs.startAutoSave()
+		fs.startAutoSave(ctx)
 	}
 	return fs, nil
 }
 
-func (f *FileStorage) restore() error {
+func (f *FileStorage) restore(ctx context.Context) error {
 	file, err := os.Open(f.path)
 	if err != nil {
 		return err
@@ -51,24 +56,38 @@ func (f *FileStorage) restore() error {
 	}
 
 	for k, v := range data.Gauges {
-		f.MemStorage.UpdateGauge(k, v)
+		f.MemStorage.UpdateGauge(ctx, k, v)
 	}
 	for k, v := range data.Counters {
-		f.MemStorage.UpdateCounter(k, v)
+		f.MemStorage.UpdateCounter(ctx, k, v)
 	}
 	return nil
 }
 
-func (f *FileStorage) saveMetrics() error {
+func (f *FileStorage) saveMetrics(ctx context.Context) error {
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	tmpfile, err := os.CreateTemp("", "metrics-*.tmp")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmpfile.Name())
 
+	gauges, err := f.GetGauges(ctx)
+	if err != nil {
+		tmpfile.Close()
+		return err
+	}
+	counters, err := f.GetCounters(ctx)
+	if err != nil {
+		tmpfile.Close()
+		return err
+	}
+
 	data := storageData{
-		Gauges:   f.GetGauges(),
-		Counters: f.GetCounters(),
+		Gauges:   gauges,
+		Counters: counters,
 	}
 
 	if err := json.NewEncoder(tmpfile).Encode(data); err != nil {
@@ -76,45 +95,66 @@ func (f *FileStorage) saveMetrics() error {
 		return err
 	}
 
-	if err := tmpfile.Close(); err != nil {
+	if err := os.Rename(tmpfile.Name(), f.path); err != nil {
 		return err
 	}
 
-	return os.Rename(tmpfile.Name(), f.path)
+	return tmpfile.Close()
 }
 
-func (f *FileStorage) Save() error {
+func (f *FileStorage) Save(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if f.syncSave {
-		return f.saveMetrics()
+		return f.saveMetrics(ctx)
 	}
 	return nil
 }
 
-func (f *FileStorage) UpdateGauge(name string, value float64) {
-	f.MemStorage.UpdateGauge(name, value)
+func (f *FileStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.MemStorage.UpdateGauge(ctx, name, value)
 	if f.syncSave {
-		if err := f.saveMetrics(); err != nil {
+		if err := f.saveMetrics(ctx); err != nil {
 			log.Printf("error saving metrics: %v", err)
 		}
 	}
+	return nil
 }
 
-func (f *FileStorage) UpdateCounter(name string, value int64) {
-	f.MemStorage.UpdateCounter(name, value)
+func (f *FileStorage) UpdateCounter(ctx context.Context, name string, value int64) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.MemStorage.UpdateCounter(ctx, name, value)
 	if f.syncSave {
-		if err := f.saveMetrics(); err != nil {
+		if err := f.saveMetrics(ctx); err != nil {
 			log.Printf("error saving metrics: %v", err)
 		}
 	}
+	return nil
 }
 
-func (f *FileStorage) startAutoSave() {
+func (f *FileStorage) startAutoSave(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(f.interval)
 		defer ticker.Stop()
 
 		for range ticker.C {
-			if err := f.saveMetrics(); err != nil {
+			if err := f.saveMetrics(ctx); err != nil {
 				log.Printf("error saving metrics: %v", err)
 			}
 		}

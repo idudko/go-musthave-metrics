@@ -79,7 +79,7 @@ func (c *Collector) Report(serverAddress string) error {
 			MType: model.Gauge,
 			Value: &value,
 		}
-		if err := sendMetricJSON(serverAddress, m); err != nil {
+		if err := sendMetricJSON(serverAddress, &m); err != nil {
 			return err
 		}
 	}
@@ -89,14 +89,14 @@ func (c *Collector) Report(serverAddress string) error {
 			MType: model.Counter,
 			Delta: &value,
 		}
-		if err := sendMetricJSON(serverAddress, m); err != nil {
+		if err := sendMetricJSON(serverAddress, &m); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func sendMetricJSON(serverAddress string, m model.Metrics) error {
+func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	url := fmt.Sprintf("http://%s/update", serverAddress)
 	data, err := json.Marshal(m)
 	if err != nil {
