@@ -1,9 +1,9 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,7 +15,6 @@ import (
 	"github.com/idudko/go-musthave-metrics/internal/repository"
 	"github.com/idudko/go-musthave-metrics/internal/service"
 	"github.com/ilyakaznacheev/cleanenv"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Config struct {
@@ -29,27 +28,36 @@ type Config struct {
 var config = Config{
 	Address:         "localhost:8080",
 	StoreInterval:   300,
-	FileStoragePath: "metrics.json",
+	FileStoragePath: "",
 	Restore:         false,
-	DSN:             "postgres://user:pass@localhost:5432/dbname?sslmode=disable",
+	DSN:             "",
 }
 
-func newServer(config Config) (*chi.Mux, error) {
-	storage, err := repository.NewFileStorage(config.FileStoragePath, config.StoreInterval, config.Restore)
-	if err != nil {
-		log.Fatalf("Failed to create storage: %v", err)
-	}
+func newServer(config Config) (*chi.Mux, repository.Storage, error) {
+	var storage repository.Storage
+	var pinger handler.DBPinger
+	var err error
 
-	pool, err := pgxpool.New(context.Background(), config.DSN)
-	if err != nil {
-		panic(err)
+	if config.DSN != "" {
+		dbStorage, err := repository.NewDBStorage(config.DSN)
+		if err != nil {
+			log.Fatalf("failed to create database storage: %v", err)
+		}
+		//defer dbStorage.Close()
+		storage = dbStorage
+		pinger = dbStorage
+	} else {
+		storage, err = repository.NewFileStorage(config.FileStoragePath, config.StoreInterval, config.Restore)
+		if err != nil {
+			log.Fatalf("failed to create file storage: %v", err)
+		}
 	}
 
 	metricsService := service.NewMetricsService(storage)
 	h := handler.NewHandler(metricsService)
 
-	dbmetricsService := service.NewDBMetricsService(pool)
-	dbH := handler.NewDBHandler(dbmetricsService)
+	// dbmetricsService := service.NewDBMetricsService(pool)
+	// dbH := handler.NewDBHandler(dbmetricsService)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -61,10 +69,14 @@ func newServer(config Config) (*chi.Mux, error) {
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
 	r.Post("/value", h.GetMetricValueJSONHandler)
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
-	r.Get("/ping", dbH.PingHandler)
 	r.Get("/", h.ListMetricsHandler)
 
-	return r, nil
+	if pinger != nil {
+		pingHandler := handler.NewPingHandler(pinger)
+		r.Get("/ping", pingHandler.PingHandler)
+	}
+
+	return r, storage, nil
 }
 
 func main() {
@@ -83,9 +95,12 @@ func main() {
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
-	r, err := newServer(config)
+	r, storage, err := newServer(config)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
+	}
+	if closer, ok := storage.(io.Closer); ok {
+		defer closer.Close()
 	}
 
 	fmt.Printf("Server is running on %s\n", config.Address)
