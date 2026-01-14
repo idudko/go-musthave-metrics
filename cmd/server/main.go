@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/idudko/go-musthave-metrics/internal/repository"
 	"github.com/idudko/go-musthave-metrics/internal/service"
 	"github.com/ilyakaznacheev/cleanenv"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Config struct {
@@ -21,6 +23,7 @@ type Config struct {
 	StoreInterval   int    `env:"STORE_INTERVAL"`
 	FileStoragePath string `env:"FILE_STORAGE_PATH"`
 	Restore         bool   `env:"RESTORE"`
+	DSN             string `env:"DATABASE_DSN"`
 }
 
 var config = Config{
@@ -28,6 +31,7 @@ var config = Config{
 	StoreInterval:   300,
 	FileStoragePath: "metrics.json",
 	Restore:         false,
+	DSN:             "postgres://user:pass@localhost:5432/dbname?sslmode=disable",
 }
 
 func newServer(config Config) (*chi.Mux, error) {
@@ -36,8 +40,16 @@ func newServer(config Config) (*chi.Mux, error) {
 		log.Fatalf("Failed to create storage: %v", err)
 	}
 
+	pool, err := pgxpool.New(context.Background(), config.DSN)
+	if err != nil {
+		panic(err)
+	}
+
 	metricsService := service.NewMetricsService(storage)
 	h := handler.NewHandler(metricsService)
+
+	dbmetricsService := service.NewDBMetricsService(pool)
+	dbH := handler.NewDBHandler(dbmetricsService)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -49,6 +61,7 @@ func newServer(config Config) (*chi.Mux, error) {
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
 	r.Post("/value", h.GetMetricValueJSONHandler)
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
+	r.Get("/ping", dbH.PingHandler)
 	r.Get("/", h.ListMetricsHandler)
 
 	return r, nil
@@ -65,6 +78,7 @@ func main() {
 	fset.IntVar(&config.StoreInterval, "i", config.StoreInterval, "Store interval in seconds (0 = synchronous)")
 	fset.StringVar(&config.FileStoragePath, "f", config.FileStoragePath, "Path to file storage")
 	fset.BoolVar(&config.Restore, "r", config.Restore, "Restore metrics from file")
+	fset.StringVar(&config.DSN, "d", config.DSN, "PostgreSQL DSN")
 
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
