@@ -125,6 +125,26 @@ func (c *Collector) ReportBatch(serverAddress string) error {
 
 func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	url := fmt.Sprintf("http://%s/update", serverAddress)
+	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+	err := doSendMetricJSON(url, m)
+	if err == nil {
+		return nil
+	}
+
+	for _, interval := range retryIntervals {
+		time.Sleep(interval)
+
+		err = doSendMetricJSON(url, m)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return err
+}
+
+func doSendMetricJSON(url string, m *model.Metrics) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -161,6 +181,27 @@ func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 
 func sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
 	url := fmt.Sprintf("http://%s/updates", serverAddress)
+	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+	err := doSendMetricsBatch(url, metrics)
+	if err == nil {
+		return nil
+	}
+
+	for _, interval := range retryIntervals {
+		time.Sleep(interval)
+
+		err = doSendMetricsBatch(url, metrics)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return err
+}
+
+func doSendMetricsBatch(url string, metrics []*model.Metrics) error {
+
 	data, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metrics: %w", err)

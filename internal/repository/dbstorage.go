@@ -2,13 +2,17 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/idudko/go-musthave-metrics/internal/model"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,6 +22,39 @@ const (
 
 type DBStorage struct {
 	pool *pgxpool.Pool
+}
+
+func isRetryableError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgerrcode.IsConnectionException(pgErr.Code)
+	}
+
+	return false
+}
+
+func retryOnError(ctx context.Context, operation func() error) error {
+	retryIntervals := []time.Duration{time.Second, time.Second * 3, time.Second * 5}
+
+	for i, interval := range retryIntervals {
+		err := operation()
+		if err == nil {
+			return nil // Успех — выходим
+		}
+		if !isRetryableError(err) {
+			return err // Ошибка не подлежит повтору — выходим
+		}
+		if i+1 < len(retryIntervals) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(interval):
+				// Ждём и пробуем снова в следующей итерации цикла
+			}
+		}
+	}
+	// После всех попыток — последняя попытка (можно убрать, если выше уже было)
+	return operation()
 }
 
 func NewDBStorage(dsn string) (*DBStorage, error) {
@@ -61,65 +98,77 @@ func (d *DBStorage) runMigrations(dsn string) error {
 }
 
 func (d *DBStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
-	query := `
-		INSERT INTO gauges (name, value) VALUES ($1, $2)
-		ON CONFLICT (name) DO UPDATE SET value = $2
-	`
-	_, err := d.pool.Exec(ctx, query, name, value)
-	return err
+	return retryOnError(ctx, func() error {
+		query := `
+			INSERT INTO gauges (name, value) VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE SET value = $2
+		`
+		_, err := d.pool.Exec(ctx, query, name, value)
+		return err
+	})
 }
 
 func (d *DBStorage) UpdateCounter(ctx context.Context, name string, value int64) error {
-	query := `
-		INSERT INTO counters (name, value) VALUES ($1, $2)
-		ON CONFLICT (name) DO UPDATE SET value = counters.value + $2
-	`
-	_, err := d.pool.Exec(ctx, query, name, value)
-	return err
+	return retryOnError(ctx, func() error {
+		query := `
+			INSERT INTO counters (name, value) VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE SET value = counters.value + $2
+		`
+		_, err := d.pool.Exec(ctx, query, name, value)
+		return err
+	})
 }
 
 func (d *DBStorage) GetGauges(ctx context.Context) (map[string]float64, error) {
-	query := `
-		SELECT name, value FROM gauges
-	`
-	rows, err := d.pool.Query(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	result := make(map[string]float64)
-	for rows.Next() {
-		var name string
-		var value float64
-		if err := rows.Scan(&name, &value); err != nil {
-			return nil, err
+	err := retryOnError(ctx, func() error {
+
+		query := `
+		SELECT name, value FROM gauges
+		`
+		rows, err := d.pool.Query(ctx, query)
+		if err != nil {
+			return err
 		}
-		result[name] = value
-	}
-	return result, rows.Err()
+		defer rows.Close()
+
+		for rows.Next() {
+			var name string
+			var value float64
+			if err := rows.Scan(&name, &value); err != nil {
+				return err
+			}
+			result[name] = value
+		}
+		return rows.Err()
+	})
+	return result, err
 }
 
 func (d *DBStorage) GetCounters(ctx context.Context) (map[string]int64, error) {
-	query := `
-		SELECT name, value FROM counters
-	`
-	rows, err := d.pool.Query(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	result := make(map[string]int64)
-	for rows.Next() {
-		var name string
-		var value int64
-		if err := rows.Scan(&name, &value); err != nil {
-			return nil, err
+	err := retryOnError(ctx, func() error {
+
+		query := `
+		SELECT name, value FROM counters
+		`
+		rows, err := d.pool.Query(ctx, query)
+		if err != nil {
+			return err
 		}
-		result[name] = value
-	}
-	return result, rows.Err()
+		defer rows.Close()
+
+		for rows.Next() {
+			var name string
+			var value int64
+			if err := rows.Scan(&name, &value); err != nil {
+				return err
+			}
+			result[name] = value
+		}
+		return rows.Err()
+	})
+	return result, err
 }
 
 func (d *DBStorage) Save(ctx context.Context) error {
@@ -135,60 +184,63 @@ func (d *DBStorage) Close() {
 }
 
 func (d *DBStorage) UpdateMetricsBatch(ctx context.Context, metrics []model.Metrics) error {
-	tx, err := d.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
+	return retryOnError(ctx, func() error {
+
+		tx, err := d.pool.Begin(ctx)
 		if err != nil {
-			tx.Rollback(ctx)
+			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-	}()
-
-	var gaugeBatch [][]any
-	var counterBatch [][]any
-
-	for _, metric := range metrics {
-		switch metric.MType {
-		case model.Gauge:
-			if metric.Value != nil {
-				gaugeBatch = append(gaugeBatch, []any{metric.ID, metric.Value})
+		defer func() {
+			if err != nil {
+				tx.Rollback(ctx)
 			}
-		case model.Counter:
-			if metric.Delta != nil {
-				counterBatch = append(counterBatch, []any{metric.ID, metric.Delta})
+		}()
+
+		var gaugeBatch [][]any
+		var counterBatch [][]any
+
+		for _, metric := range metrics {
+			switch metric.MType {
+			case model.Gauge:
+				if metric.Value != nil {
+					gaugeBatch = append(gaugeBatch, []any{metric.ID, metric.Value})
+				}
+			case model.Counter:
+				if metric.Delta != nil {
+					counterBatch = append(counterBatch, []any{metric.ID, metric.Delta})
+				}
 			}
 		}
-	}
 
-	if len(gaugeBatch) > 0 {
-		for _, row := range gaugeBatch {
-			query := `
+		if len(gaugeBatch) > 0 {
+			for _, row := range gaugeBatch {
+				query := `
 				INSERT INTO gauges (name, value)
 				VALUES ($1, $2)
 			 	ON CONFLICT (name) DO UPDATE SET value = $2
 				`
-			if _, err := tx.Exec(ctx, query, row[0], row[1]); err != nil {
-				return fmt.Errorf("failed to update gauge: %w", err)
+				if _, err := tx.Exec(ctx, query, row[0], row[1]); err != nil {
+					return fmt.Errorf("failed to update gauge: %w", err)
+				}
 			}
 		}
-	}
 
-	if len(counterBatch) > 0 {
-		for _, row := range counterBatch {
-			query := `
+		if len(counterBatch) > 0 {
+			for _, row := range counterBatch {
+				query := `
 				INSERT INTO counters (name, value)
 				VALUES ($1, $2)
 			 	ON CONFLICT (name) DO UPDATE SET value = counters.value + $2
 				`
-			if _, err := tx.Exec(ctx, query, row[0], row[1]); err != nil {
-				return fmt.Errorf("failed to update counter: %w", err)
+				if _, err := tx.Exec(ctx, query, row[0], row[1]); err != nil {
+					return fmt.Errorf("failed to update counter: %w", err)
+				}
 			}
 		}
-	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+		return nil
+	})
 }
