@@ -8,7 +8,12 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	dbBatchSize = 500
 )
 
 type DBStorage struct {
@@ -127,4 +132,63 @@ func (d *DBStorage) Ping(ctx context.Context) error {
 
 func (d *DBStorage) Close() {
 	d.pool.Close()
+}
+
+func (d *DBStorage) UpdateMetricsBatch(ctx context.Context, metrics []model.Metrics) error {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback(ctx)
+		}
+	}()
+
+	var gaugeBatch [][]any
+	var counterBatch [][]any
+
+	for _, metric := range metrics {
+		switch metric.MType {
+		case model.Gauge:
+			if metric.Value != nil {
+				gaugeBatch = append(gaugeBatch, []any{metric.ID, metric.Value})
+			}
+		case model.Counter:
+			if metric.Delta != nil {
+				counterBatch = append(counterBatch, []any{metric.ID, metric.Delta})
+			}
+		}
+	}
+
+	if len(gaugeBatch) > 0 {
+		for _, row := range gaugeBatch {
+			query := `
+				INSERT INTO gauges (name, value)
+				VALUES ($1, $2)
+			 	ON CONFLICT (name) DO UPDATE SET value = $2
+				`
+			if _, err := tx.Exec(ctx, query, row[0], row[1]); err != nil {
+				return fmt.Errorf("failed to update gauge: %w", err)
+			}
+		}
+	}
+
+	if len(counterBatch) > 0 {
+		for _, row := range counterBatch {
+			query := `
+				INSERT INTO counters (name, value)
+				VALUES ($1, $2)
+			 	ON CONFLICT (name) DO UPDATE SET value = counters.value + $2
+				`
+			if _, err := tx.Exec(ctx, query, row[0], row[1]); err != nil {
+				return fmt.Errorf("failed to update counter: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
 }
