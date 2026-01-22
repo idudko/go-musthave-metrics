@@ -16,7 +16,7 @@ import (
 func TestUpdateMetricsHandler(t *testing.T) {
 	storage := repository.NewMemStorage()
 	service := service.NewMetricsService(storage)
-	handler := NewHandler(service)
+	handler := NewHandler(service, "")
 
 	r := chi.NewRouter()
 	r.Post("/update/{type}/{name}/{value}", handler.UpdateMetricHandler)
