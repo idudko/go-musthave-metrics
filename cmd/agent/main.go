@@ -4,7 +4,8 @@ import (
 	"flag"
 	"log"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
 	"github.com/idudko/go-musthave-metrics/internal/agent"
 	"github.com/ilyakaznacheev/cleanenv"
@@ -16,6 +17,7 @@ type Config struct {
 	ReportInterval int    `env:"REPORT_INTERVAL"`
 	UseBatch       bool   `env:"BATCH"`
 	Key            string `env:"KEY"`
+	RateLimit      int    `env:"RATE_LIMIT"`
 }
 
 var config = Config{
@@ -24,6 +26,7 @@ var config = Config{
 	ReportInterval: 10,
 	UseBatch:       true,
 	Key:            "",
+	RateLimit:      1,
 }
 
 func main() {
@@ -37,28 +40,21 @@ func main() {
 	fset.IntVar(&config.ReportInterval, "r", config.ReportInterval, "Report interval in seconds")
 	fset.BoolVar(&config.UseBatch, "b", config.UseBatch, "Use batch reporting")
 	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
+	fset.IntVar(&config.RateLimit, "l", config.RateLimit, "Rate limit for concurrent requests")
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
-	collector := agent.NewCollector(config.Key)
-	pollsSinceReport := 0
-
-	for {
-		collector.Collect()
-		time.Sleep(time.Duration(config.PollInterval) * time.Second)
-		pollsSinceReport++
-
-		if pollsSinceReport >= (config.ReportInterval / config.PollInterval) {
-			var err error
-			if config.UseBatch {
-				err = collector.ReportBatch(config.Address)
-			} else {
-				err = collector.Report(config.Address)
-			}
-			if err != nil {
-				log.Printf("error reporting metrics: %v", err)
-			}
-			pollsSinceReport = 0
-		}
+	if config.RateLimit <= 0 {
+		config.RateLimit = 1
 	}
+
+	metricsService := agent.NewMetricsService(config.Address, config.Key, config.UseBatch, config.RateLimit)
+	metricsService.Start(config.PollInterval, config.ReportInterval)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	metricsService.Stop()
+	log.Println("Agent gracefully stopped")
 }

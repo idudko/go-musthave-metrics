@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
 
@@ -18,9 +17,7 @@ func HashValidationMiddleware(key string) func(http.Handler) http.Handler {
 				return
 			}
 
-			receivedHash := r.Header.Get("HashSHA256") // HashSHA256!
-
-			fmt.Println("RHASH =", receivedHash)
+			receivedHash := r.Header.Get("HashSHA256")
 
 			if receivedHash == "" || receivedHash == "none" {
 				next.ServeHTTP(w, r)

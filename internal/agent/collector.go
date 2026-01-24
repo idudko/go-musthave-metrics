@@ -3,7 +3,9 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
+	"maps"
 	"math/rand"
 	"net/http"
 	"runtime"
@@ -14,6 +16,8 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/pkg/hash"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type Collector struct {
@@ -73,84 +77,64 @@ func (c *Collector) Collect() {
 	c.counters["PollCount"] = c.pollCount
 }
 
-func (c *Collector) Report(serverAddress string) error {
+func (c *Collector) CollectSystemMetrics() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for name, value := range c.gauges {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Gauge,
-			Value: &value,
-		}
-		if err := c.sendMetricJSON(serverAddress, &m); err != nil {
-			return err
+	vmStat, err := mem.VirtualMemory()
+	if err == nil {
+		c.gauges["TotalMemory"] = float64(vmStat.Total)
+		c.gauges["FreeMemory"] = float64(vmStat.Free)
+	}
+
+	cpuCount := runtime.NumCPU()
+	cpuPercents, err := cpu.Percent(time.Second, false)
+	if err == nil && len(cpuPercents) > 0 {
+		for i, percent := range cpuPercents {
+			if i < cpuCount {
+				c.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = percent
+			}
 		}
 	}
-	for name, value := range c.counters {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Counter,
-			Delta: &value,
-		}
-		if err := c.sendMetricJSON(serverAddress, &m); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
-func (c *Collector) ReportBatch(serverAddress string) error {
+func (c *Collector) GetMetrics() (map[string]float64, map[string]int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	metrics := make([]*model.Metrics, 0, len(c.counters)+len(c.gauges))
+	gaugesCopy := make(map[string]float64, len(c.gauges))
+	countersCopy := make(map[string]int64, len(c.counters))
+	maps.Copy(gaugesCopy, c.gauges)
+	maps.Copy(countersCopy, c.counters)
 
-	for name, value := range c.counters {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Counter,
-			Delta: &value,
-		}
-		metrics = append(metrics, &m)
-	}
-	for name, value := range c.gauges {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Gauge,
-			Value: &value,
-		}
-		metrics = append(metrics, &m)
-	}
-
-	if len(metrics) == 0 {
-		return nil
-	}
-	return c.sendMetricsBatch(serverAddress, metrics)
+	return gaugesCopy, countersCopy
 }
 
-func (c *Collector) sendMetricJSON(serverAddress string, m *model.Metrics) error {
+func (c *Collector) sendMetricJSON(ctx context.Context, serverAddress string, m *model.Metrics) error {
 	url := fmt.Sprintf("http://%s/update", serverAddress)
 	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
 
-	err := c.doSendMetricJSON(url, m)
+	err := c.doSendMetricJSON(ctx, url, m)
 	if err == nil {
 		return nil
 	}
 
 	for _, interval := range retryIntervals {
-		time.Sleep(interval)
-
-		err = c.doSendMetricJSON(url, m)
-		if err == nil {
-			return nil
+		select {
+		case <-time.After(interval):
+			err = c.doSendMetricJSON(ctx, url, m)
+			if err == nil {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
 	return err
 }
 
-func (c *Collector) doSendMetricJSON(url string, m *model.Metrics) error {
+func (c *Collector) doSendMetricJSON(ctx context.Context, url string, m *model.Metrics) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -166,7 +150,7 @@ func (c *Collector) doSendMetricJSON(url string, m *model.Metrics) error {
 	}
 
 	compressed := b.Bytes()
-	req, err := http.NewRequest(http.MethodPost, url, &b)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
 	if err != nil {
 		return err
 	}
@@ -191,11 +175,11 @@ func (c *Collector) doSendMetricJSON(url string, m *model.Metrics) error {
 	return nil
 }
 
-func (c *Collector) sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
+func (c *Collector) sendMetricsBatch(ctx context.Context, serverAddress string, metrics []*model.Metrics) error {
 	url := fmt.Sprintf("http://%s/updates", serverAddress)
 	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
 
-	err := c.doSendMetricsBatch(url, metrics)
+	err := c.doSendMetricsBatch(ctx, url, metrics)
 	if err == nil {
 		return nil
 	}
@@ -205,18 +189,21 @@ func (c *Collector) sendMetricsBatch(serverAddress string, metrics []*model.Metr
 	}
 
 	for _, interval := range retryIntervals {
-		time.Sleep(interval)
-
-		err = c.doSendMetricsBatch(url, metrics)
-		if err == nil {
-			return nil
+		select {
+		case <-time.After(interval):
+			err = c.doSendMetricsBatch(ctx, url, metrics)
+			if err == nil {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
 	return err
 }
 
-func (c *Collector) doSendMetricsBatch(url string, metrics []*model.Metrics) error {
+func (c *Collector) doSendMetricsBatch(ctx context.Context, url string, metrics []*model.Metrics) error {
 	data, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metrics: %w", err)
@@ -231,7 +218,7 @@ func (c *Collector) doSendMetricsBatch(url string, metrics []*model.Metrics) err
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 	compressed := b.Bytes()
-	req, err := http.NewRequest(http.MethodPost, url, &b)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
 	if err != nil {
 		return err
 	}
