@@ -34,8 +34,8 @@ func HashValidationMiddleware(key string) func(http.Handler) http.Handler {
 
 			if !hash.ValidateHash(body, key, receivedHash) {
 				log.Printf("Invalid hash signature")
-				//http.Error(w, "Invalid hash signature", http.StatusBadRequest)
-				//return
+				http.Error(w, "Invalid hash signature", http.StatusBadRequest)
+				return
 			}
 
 			next.ServeHTTP(w, r)

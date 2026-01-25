@@ -10,6 +10,7 @@ import (
 
 type MetricsService struct {
 	collector     *Collector
+	sender        *Sender
 	serverAddress string
 	useBatch      bool
 	rateLimit     int
@@ -27,6 +28,7 @@ func NewMetricsService(serverAddress, key string, useBatch bool, rateLimit int) 
 
 	return &MetricsService{
 		collector:     NewCollector(key),
+		sender:        NewSender(key),
 		serverAddress: serverAddress,
 		useBatch:      useBatch,
 		rateLimit:     rateLimit,
@@ -128,7 +130,7 @@ func (s *MetricsService) enqueueMetricsForSending() {
 			}
 
 			if len(metrics) > 0 {
-				return s.collector.sendMetricsBatch(ctx, s.serverAddress, metrics)
+				return s.sender.SendMetricsBatch(ctx, s.serverAddress, metrics)
 			}
 			return nil
 		})
@@ -142,7 +144,7 @@ func (s *MetricsService) enqueueMetricsForSending() {
 					MType: model.Counter,
 					Delta: &value,
 				}
-				return s.collector.sendMetricJSON(ctx, s.serverAddress, &m)
+				return s.sender.SendMetricJSON(ctx, s.serverAddress, &m)
 			})
 		}
 
@@ -155,7 +157,7 @@ func (s *MetricsService) enqueueMetricsForSending() {
 					MType: model.Gauge,
 					Value: &value,
 				}
-				return s.collector.sendMetricJSON(ctx, s.serverAddress, &m)
+				return s.sender.SendMetricJSON(ctx, s.serverAddress, &m)
 			})
 		}
 	}

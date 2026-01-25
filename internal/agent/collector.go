@@ -1,21 +1,12 @@
 package agent
 
 import (
-	"bytes"
-	"compress/gzip"
-	"context"
 	"fmt"
-	"maps"
 	"math/rand"
-	"net/http"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
-	"github.com/idudko/go-musthave-metrics/internal/model"
-	"github.com/idudko/go-musthave-metrics/pkg/hash"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 )
@@ -87,13 +78,11 @@ func (c *Collector) CollectSystemMetrics() {
 		c.gauges["FreeMemory"] = float64(vmStat.Free)
 	}
 
-	cpuCount := runtime.NumCPU()
-	cpuPercents, err := cpu.Percent(time.Second, false)
+	// Используем true для получения per-CPU метрик
+	cpuPercents, err := cpu.Percent(time.Second, true)
 	if err == nil && len(cpuPercents) > 0 {
 		for i, percent := range cpuPercents {
-			if i < cpuCount {
-				c.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = percent
-			}
+			c.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = percent
 		}
 	}
 }
@@ -104,142 +93,14 @@ func (c *Collector) GetMetrics() (map[string]float64, map[string]int64) {
 
 	gaugesCopy := make(map[string]float64, len(c.gauges))
 	countersCopy := make(map[string]int64, len(c.counters))
-	maps.Copy(gaugesCopy, c.gauges)
-	maps.Copy(countersCopy, c.counters)
+
+	for k, v := range c.gauges {
+		gaugesCopy[k] = v
+	}
+
+	for k, v := range c.counters {
+		countersCopy[k] = v
+	}
 
 	return gaugesCopy, countersCopy
-}
-
-func (c *Collector) sendMetricJSON(ctx context.Context, serverAddress string, m *model.Metrics) error {
-	url := fmt.Sprintf("http://%s/update", serverAddress)
-	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
-
-	err := c.doSendMetricJSON(ctx, url, m)
-	if err == nil {
-		return nil
-	}
-
-	for _, interval := range retryIntervals {
-		select {
-		case <-time.After(interval):
-			err = c.doSendMetricJSON(ctx, url, m)
-			if err == nil {
-				return nil
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-
-	return err
-}
-
-func (c *Collector) doSendMetricJSON(ctx context.Context, url string, m *model.Metrics) error {
-	data, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-
-	var b bytes.Buffer
-	gw := gzip.NewWriter(&b)
-	if _, err := gw.Write(data); err != nil {
-		return err
-	}
-	if err := gw.Close(); err != nil {
-		return err
-	}
-
-	compressed := b.Bytes()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-
-	if c.key != "" {
-		hashValue := hash.ComputeHash(compressed, c.key)
-		req.Header.Set("HashSHA256", hashValue)
-	}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (c *Collector) sendMetricsBatch(ctx context.Context, serverAddress string, metrics []*model.Metrics) error {
-	url := fmt.Sprintf("http://%s/updates", serverAddress)
-	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
-
-	err := c.doSendMetricsBatch(ctx, url, metrics)
-	if err == nil {
-		return nil
-	}
-
-	if strings.Contains(err.Error(), "400") {
-		return nil
-	}
-
-	for _, interval := range retryIntervals {
-		select {
-		case <-time.After(interval):
-			err = c.doSendMetricsBatch(ctx, url, metrics)
-			if err == nil {
-				return nil
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-
-	return err
-}
-
-func (c *Collector) doSendMetricsBatch(ctx context.Context, url string, metrics []*model.Metrics) error {
-	data, err := json.Marshal(metrics)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metrics: %w", err)
-	}
-
-	var b bytes.Buffer
-	gw := gzip.NewWriter(&b)
-	if _, err := gw.Write(data); err != nil {
-		return fmt.Errorf("failed to write data to gzip writer: %w", err)
-	}
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-	compressed := b.Bytes()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-
-	if c.key != "" {
-		hashValue := hash.ComputeHash(compressed, c.key)
-		req.Header.Set("HashSHA256", hashValue)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	return nil
 }
