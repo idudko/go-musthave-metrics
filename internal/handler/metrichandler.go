@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/goccy/go-json"
+	"github.com/idudko/go-musthave-metrics/internal/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/internal/service"
 	"github.com/idudko/go-musthave-metrics/pkg/hash"
@@ -61,6 +62,11 @@ func (h *Handler) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Добавляем метрику в контекст аудита
+	if auditCtx := middleware.GetAuditContext(r.Context()); auditCtx != nil {
+		auditCtx.AddMetric(metricName)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -121,6 +127,11 @@ func (h *Handler) UpdateMetricJSONHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
 		return
+	}
+
+	// Добавляем метрику в контекст аудита
+	if auditCtx := middleware.GetAuditContext(r.Context()); auditCtx != nil {
+		auditCtx.AddMetric(metric.ID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -229,6 +240,11 @@ func (h *Handler) UpdateMetricsBatchHandler(w http.ResponseWriter, r *http.Reque
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+
+		// Добавляем метрику в контекст аудита
+		if auditCtx := middleware.GetAuditContext(r.Context()); auditCtx != nil {
+			auditCtx.AddMetric(metric.ID)
 		}
 	}
 

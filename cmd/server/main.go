@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/idudko/go-musthave-metrics/internal/audit"
 	"github.com/idudko/go-musthave-metrics/internal/handler"
 	"github.com/idudko/go-musthave-metrics/internal/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
@@ -24,6 +25,8 @@ type Config struct {
 	Restore         bool   `env:"RESTORE"`
 	DSN             string `env:"DATABASE_DSN"`
 	Key             string `env:"KEY"`
+	AuditFile       string `env:"AUDIT_FILE"`
+	AuditURL        string `env:"AUDIT_URL"`
 }
 
 var config = Config{
@@ -33,6 +36,8 @@ var config = Config{
 	Restore:         false,
 	DSN:             "",
 	Key:             "",
+	AuditFile:       "",
+	AuditURL:        "",
 }
 
 func newServer(config Config) (*chi.Mux, repository.Storage, error) {
@@ -54,6 +59,21 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 		}
 	}
 
+	var auditSubject *audit.Subject
+	if config.AuditFile != "" || config.AuditURL != "" {
+		auditSubject = audit.NewSubject()
+	}
+
+	if config.AuditFile != "" {
+		fileObserver := audit.NewFileObserver(config.AuditFile)
+		auditSubject.Attach(fileObserver)
+	}
+
+	if config.AuditURL != "" {
+		httpObserver := audit.NewHTTPObserver(config.AuditURL)
+		auditSubject.Attach(httpObserver)
+	}
+
 	metricsService := service.NewMetricsService(storage)
 	h := handler.NewHandler(metricsService, config.Key)
 
@@ -64,6 +84,10 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Use(middleware.HashValidationMiddleware(config.Key))
 	r.Use(middleware.GzipRequestMiddleware)
 	r.Use(chimiddleware.Compress(5, "application/json", "text/html"))
+
+	if config.AuditFile != "" || config.AuditURL != "" {
+		r.Use(middleware.AuditMiddleware(auditSubject))
+	}
 
 	r.Post("/update", h.UpdateMetricJSONHandler)
 	r.Post("/updates", h.UpdateMetricsBatchHandler)
@@ -92,6 +116,8 @@ func main() {
 	fset.BoolVar(&config.Restore, "r", config.Restore, "Restore metrics from file")
 	fset.StringVar(&config.DSN, "d", config.DSN, "PostgreSQL DSN")
 	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
+	fset.StringVar(&config.AuditFile, "audit-file", config.AuditFile, "Path to audit log file")
+	fset.StringVar(&config.AuditURL, "audit-url", config.AuditURL, "URL for audit server")
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
@@ -108,5 +134,14 @@ func main() {
 	if config.Key != "" {
 		fmt.Println("Hash validation enabled")
 	}
+
+	if config.AuditFile != "" {
+		fmt.Printf("Audit file: %s\n", config.AuditFile)
+	}
+
+	if config.AuditURL != "" {
+		fmt.Printf("Audit URL: %s\n", config.AuditURL)
+	}
+
 	log.Fatal(http.ListenAndServe(config.Address, r))
 }
