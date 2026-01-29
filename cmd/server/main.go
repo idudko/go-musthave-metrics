@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	pprofhttp "net/http/pprof"
 	"os"
 
 	"github.com/go-chi/chi/v5"
@@ -95,6 +96,25 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Post("/value", h.GetMetricValueJSONHandler)
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
+
+	// Add pprof endpoints for profiling
+	pprofRouter := chi.NewRouter()
+	pprofRouter.Get("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/debug/pprof/heap", http.StatusTemporaryRedirect)
+	}))
+	pprofRouter.Get("/heap", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pprofhttp.Handler("heap").ServeHTTP(w, r)
+	}))
+	pprofRouter.Get("/allocs", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pprofhttp.Handler("allocs").ServeHTTP(w, r)
+	}))
+	pprofRouter.Get("/goroutine", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pprofhttp.Handler("goroutine").ServeHTTP(w, r)
+	}))
+	pprofRouter.Get("/block", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pprofhttp.Handler("block").ServeHTTP(w, r)
+	}))
+	r.Mount("/debug/pprof", pprofRouter)
 
 	if pinger != nil {
 		pingHandler := handler.NewPingHandler(pinger)

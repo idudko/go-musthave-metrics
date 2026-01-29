@@ -79,6 +79,7 @@ func TestUpdateMetricsHandler(t *testing.T) {
 		})
 	}
 }
+
 func float64Ptr(v float64) *float64 {
 	return &v
 }

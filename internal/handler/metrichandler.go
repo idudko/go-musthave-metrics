@@ -22,12 +22,32 @@ const (
 type Handler struct {
 	metricsService *service.MetricsService
 	key            string
+	listTemplate   *template.Template
 }
 
 func NewHandler(metricsService *service.MetricsService, key string) *Handler {
+	tmpl := `
+		<html>
+			<head>
+				<title>Metrics</title>
+			</head>
+			<body>
+				<div>
+					{{range $name, $value := .Gauges}}
+						{{$name}}: {{$value}}<br/>
+					{{end}}
+					{{range $name, $value := .Counters}}
+						{{$name}}: {{$value}}<br/>
+					{{end}}
+				</div>
+			</body>
+		</html>
+	`
+
 	return &Handler{
 		metricsService: metricsService,
 		key:            key,
+		listTemplate:   template.Must(template.New("metrics").Parse(tmpl)),
 	}
 }
 
@@ -265,24 +285,6 @@ func (h *Handler) ListMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl := `
-		<html>
-			<head>
-				<title>Metrics</title>
-			</head>
-			<body>
-				<div>
-					{{range $name, $value := .Gauges}}
-						{{$name}}: {{$value}}<br/>
-					{{end}}
-					{{range $name, $value := .Counters}}
-						{{$name}}: {{$value}}<br/>
-					{{end}}
-				</div>
-			</body>
-		</html>
-	`
-
 	data := struct {
 		Gauges   map[string]float64
 		Counters map[string]int64
@@ -291,7 +293,6 @@ func (h *Handler) ListMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		Counters: counters,
 	}
 
-	t := template.Must(template.New("metrics").Parse(tmpl))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	t.Execute(w, data)
+	h.listTemplate.Execute(w, data)
 }

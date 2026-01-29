@@ -42,3 +42,60 @@ git fetch template && git checkout template/main .github
 - **Clean Architecture**
 - **Hexagonal Architecture**
 - **Layered Architecture**
+
+
+### Результат внесённых изменений
+
+```
+$ go tool pprof -top -diff_base=profiles/base.pprof profiles/result.pprof
+
+base.pprof profiles/result.pprof
+File: server
+Type: inuse_space
+Time: 2026-01-30 01:23:40 +04
+Showing nodes accounting for 518.63kB, 26.90% of 1927.64kB total
+      flat  flat%   sum%        cum   cum%
+  908.20kB 47.11% 47.11%   908.20kB 47.11%  github.com/goccy/go-json/internal/decoder.initDecoder.func1
+ -902.59kB 46.82%  0.29%  -902.59kB 46.82%  compress/flate.NewWriter (inline)
+     513kB 26.61% 26.90%      513kB 26.61%  runtime.allocm
+  512.07kB 26.56% 53.47%   512.07kB 26.56%  github.com/go-chi/chi/v5.endpoints.Value (inline)
+ -512.05kB 26.56% 26.90%  -512.05kB 26.56%  time.NewTicker
+         0     0% 26.90%   512.07kB 26.56%  github.com/go-chi/chi/v5.(*Mux).Post (inline)
+         0     0% 26.90%   908.20kB 47.11%  github.com/go-chi/chi/v5.(*Mux).ServeHTTP
+         0     0% 26.90%   512.07kB 26.56%  github.com/go-chi/chi/v5.(*Mux).handle
+         0     0% 26.90%   908.20kB 47.11%  github.com/go-chi/chi/v5.(*Mux).routeHTTP
+         0     0% 26.90%   512.07kB 26.56%  github.com/go-chi/chi/v5.(*node).InsertRoute
+         0     0% 26.90%   512.07kB 26.56%  github.com/go-chi/chi/v5.(*node).setEndpoint
+         0     0% 26.90%   908.20kB 47.11%  github.com/go-chi/chi/v5/middleware.(*Compressor).Handler-fm.(*Compressor).Handler.func1
+         0     0% 26.90%  -902.59kB 46.82%  github.com/go-chi/chi/v5/middleware.(*Compressor).SetEncoder
+         0     0% 26.90%  -902.59kB 46.82%  github.com/go-chi/chi/v5/middleware.Compress (inline)
+         0     0% 26.90%  -902.59kB 46.82%  github.com/go-chi/chi/v5/middleware.NewCompressor
+         0     0% 26.90%   908.20kB 47.11%  github.com/go-chi/chi/v5/middleware.StripSlashes.func1
+         0     0% 26.90%  -902.59kB 46.82%  github.com/go-chi/chi/v5/middleware.encoderDeflate
+         0     0% 26.90%   908.20kB 47.11%  github.com/go-chi/chi/v5/middleware.init.0.RequestLogger.func1.1
+         0     0% 26.90%   908.20kB 47.11%  github.com/goccy/go-json.(*Decoder).Decode (inline)
+         0     0% 26.90%   908.20kB 47.11%  github.com/goccy/go-json.(*Decoder).DecodeWithOption
+         0     0% 26.90%   908.20kB 47.11%  github.com/goccy/go-json/internal/decoder.CompileToGetDecoder
+         0     0% 26.90%   908.20kB 47.11%  github.com/goccy/go-json/internal/decoder.initDecoder
+         0     0% 26.90%   908.20kB 47.11%  github.com/idudko/go-musthave-metrics/internal/handler.(*Handler).UpdateMetricsBatchHandler
+         0     0% 26.90%   908.20kB 47.11%  github.com/idudko/go-musthave-metrics/internal/middleware.GzipRequestMiddleware.func1
+         0     0% 26.90%   908.20kB 47.11%  github.com/idudko/go-musthave-metrics/internal/middleware.LoggingMiddleware.func1
+         0     0% 26.90%  -512.05kB 26.56%  github.com/idudko/go-musthave-metrics/internal/repository.(*FileStorage).startAutoSave.func1
+         0     0% 26.90%  -390.52kB 20.26%  main.main
+         0     0% 26.90%  -390.52kB 20.26%  main.newServer
+         0     0% 26.90%   908.20kB 47.11%  main.newServer.HashValidationMiddleware.func6.1
+         0     0% 26.90%   908.20kB 47.11%  net/http.(*conn).serve
+         0     0% 26.90%   908.20kB 47.11%  net/http.HandlerFunc.ServeHTTP
+         0     0% 26.90%   908.20kB 47.11%  net/http.serverHandler.ServeHTTP
+         0     0% 26.90%  -390.52kB 20.26%  runtime.main
+         0     0% 26.90%      513kB 26.61%  runtime.mstart
+         0     0% 26.90%      513kB 26.61%  runtime.mstart0
+         0     0% 26.90%      513kB 26.61%  runtime.mstart1
+         0     0% 26.90%      513kB 26.61%  runtime.newm
+         0     0% 26.90%      513kB 26.61%  runtime.resetspinning
+         0     0% 26.90%      513kB 26.61%  runtime.schedule
+         0     0% 26.90%      513kB 26.61%  runtime.startm
+         0     0% 26.90%      513kB 26.61%  runtime.wakep
+         0     0% 26.90%   908.20kB 47.11%  sync.(*Once).Do (inline)
+         0     0% 26.90%   908.20kB 47.11%  sync.(*Once).doSlow
+```
