@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5/middleware"
+
 	"github.com/idudko/go-musthave-metrics/internal/audit"
 )
 

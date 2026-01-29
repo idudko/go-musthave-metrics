@@ -5,8 +5,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/idudko/go-musthave-metrics/pkg/hash"
 	"github.com/rs/zerolog/log"
+
+	"github.com/idudko/go-musthave-metrics/pkg/hash"
 )
 
 func HashValidationMiddleware(key string) func(http.Handler) http.Handler {

@@ -11,12 +11,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/ilyakaznacheev/cleanenv"
+
 	"github.com/idudko/go-musthave-metrics/internal/audit"
 	"github.com/idudko/go-musthave-metrics/internal/handler"
 	"github.com/idudko/go-musthave-metrics/internal/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
 	"github.com/idudko/go-musthave-metrics/internal/service"
-	"github.com/ilyakaznacheev/cleanenv"
 )
 
 type Config struct {
