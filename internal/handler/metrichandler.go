@@ -171,5 +171,6 @@ func (h *Handler) ListMetricsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := template.Must(template.New("metrics").Parse(tmpl))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	t.Execute(w, data)
 }

@@ -32,6 +32,8 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.GzipRequestMiddleware)
+	r.Use(chimiddleware.Compress(5, "application/json", "text/html"))
 	r.Post("/update", h.UpdateMetricJSONHandler)
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
 	r.Post("/value", h.GetMetricValueJSONHandler)
