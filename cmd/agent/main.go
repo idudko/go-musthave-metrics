@@ -34,15 +34,19 @@ func main() {
 	reportInterval := flag.Int("r", defaultReportInterval, "Report interval in seconds")
 	flag.Parse()
 	collector := agent.NewCollector()
+	pollsSinceReport := 0
 
 	for {
 		collector.Collect()
 		time.Sleep(time.Duration(*pollInterval) * time.Second)
 
-		err := collector.Report(*serverAddr)
-		if err != nil {
-			log.Printf("error reporting metrics: %v", err)
+		pollsSinceReport++
+		if pollsSinceReport >= (*reportInterval / *pollInterval) {
+			err := collector.Report(*serverAddr)
+			if err != nil {
+				log.Printf("error reporting metrics: %v", err)
+			}
+			pollsSinceReport = 0
 		}
-		time.Sleep(time.Duration(*reportInterval-*pollInterval) * time.Second)
 	}
 }

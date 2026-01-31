@@ -2,7 +2,6 @@ package service
 
 import (
 	"errors"
-	"strconv"
 
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
@@ -16,28 +15,27 @@ func NewMetricsService(storage repository.Storage) *MetricsService {
 	return &MetricsService{storage: storage}
 }
 
-func (s *MetricsService) UpdateMetric(metricType, metricName, metricValue string) error {
+func (s *MetricsService) UpdateMetric(metricType, metricName string, metricValue any) error {
 	switch metricType {
-	case model.Counter:
-		value, err := strconv.ParseInt(metricValue, 10, 64)
-		if err != nil {
-			return errors.New("invalid counter value")
-		}
-		s.storage.UpdateCounter(metricName, value)
 	case model.Gauge:
-		value, err := strconv.ParseFloat(metricValue, 64)
-		if err != nil {
+		if value, ok := metricValue.(float64); ok {
+			s.storage.UpdateGauge(metricName, value)
+		} else {
 			return errors.New("invalid gauge value")
 		}
-		s.storage.UpdateGauge(metricName, value)
+	case model.Counter:
+		if value, ok := metricValue.(int64); ok {
+			s.storage.UpdateCounter(metricName, value)
+		} else {
+			return errors.New("invalid counter value")
+		}
 	default:
 		return errors.New("invalid metric type")
 	}
-
 	return nil
 }
 
-func (s *MetricsService) GetMetricValue(metricType, metricName string) (interface{}, error) {
+func (s *MetricsService) GetMetricValue(metricType, metricName string) (any, error) {
 	switch metricType {
 	case model.Counter:
 		counters := s.storage.GetCounters()

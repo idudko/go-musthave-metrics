@@ -30,8 +30,11 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Post("/update", h.UpdateMetricJSONHandler)
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
+	r.Post("/value", h.GetMetricValueJSONHandler)
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
 
