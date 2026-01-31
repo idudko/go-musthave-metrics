@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -122,6 +123,8 @@ func (h *Handler) GetMetricValueJSONHandler(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
+
+	fmt.Print(io.ReadAll(r.Body))
 
 	if m.ID == "" || m.MType == "" {
 		http.Error(w, "Invalid metric data", http.StatusBadRequest)

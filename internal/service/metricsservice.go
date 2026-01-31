@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
@@ -12,6 +13,7 @@ import (
 var (
 	ErrInvalidMetricType = errors.New("invalid metric type")
 	ErrInvalidValue      = errors.New("invalid value")
+	ErrMetricNotFound    = errors.New("metric not found")
 )
 
 type MetricsService struct {
@@ -65,9 +67,10 @@ func (s *MetricsService) GetMetricValue(ctx context.Context, metricType, metricN
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("Available counters: %v", counters[metricName])
 		value, exists := counters[metricName]
 		if !exists {
-			return nil, errors.New("metric not found")
+			return nil, ErrMetricNotFound
 		}
 		return value, nil
 	case model.Gauge:
@@ -77,11 +80,11 @@ func (s *MetricsService) GetMetricValue(ctx context.Context, metricType, metricN
 		}
 		value, exists := gauges[metricName]
 		if !exists {
-			return nil, errors.New("metric not found")
+			return nil, ErrMetricNotFound
 		}
 		return value, nil
 	default:
-		return nil, errors.New("invalid metric type")
+		return nil, ErrInvalidMetricType
 	}
 }
 
