@@ -12,6 +12,11 @@ import (
 	"github.com/idudko/go-musthave-metrics/internal/service"
 )
 
+const (
+	MetricTypeGauge   = "gauge"
+	MetricTypeCounter = "counter"
+)
+
 type Handler struct {
 	metricsService *service.MetricsService
 }
@@ -21,6 +26,7 @@ func NewHandler(metricsService *service.MetricsService) *Handler {
 }
 
 func (h *Handler) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
 	metricValue := chi.URLParam(r, "value")
@@ -33,20 +39,20 @@ func (h *Handler) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
 	var value any
 	var err error
 	switch metricType {
-	case "counter":
+	case MetricTypeCounter:
 		value, err = strconv.ParseInt(metricValue, 10, 64)
 		if err != nil {
 			http.Error(w, "Invalid counter value", http.StatusBadRequest)
 			return
 		}
-	case "gauge":
+	case MetricTypeGauge:
 		value, err = strconv.ParseFloat(metricValue, 64)
 		if err != nil {
 			http.Error(w, "Invalid counter value", http.StatusBadRequest)
 			return
 		}
 	}
-	err = h.metricsService.UpdateMetric(metricType, metricName, value)
+	err = h.metricsService.UpdateMetric(ctx, metricType, metricName, value)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -56,6 +62,7 @@ func (h *Handler) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateMetricJSONHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var metric model.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&metric); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -69,18 +76,18 @@ func (h *Handler) UpdateMetricJSONHandler(w http.ResponseWriter, r *http.Request
 
 	var err error
 	switch metric.MType {
-	case "gauge":
+	case MetricTypeGauge:
 		if metric.Value == nil {
 			http.Error(w, "Value is required for gauge", http.StatusBadRequest)
 			return
 		}
-		err = h.metricsService.UpdateMetric(metric.MType, metric.ID, *metric.Value)
-	case "counter":
+		err = h.metricsService.UpdateMetric(ctx, metric.MType, metric.ID, *metric.Value)
+	case MetricTypeCounter:
 		if metric.Delta == nil {
 			http.Error(w, "Delta is required for counter", http.StatusBadRequest)
 			return
 		}
-		err = h.metricsService.UpdateMetric(metric.MType, metric.ID, *metric.Delta)
+		err = h.metricsService.UpdateMetric(ctx, metric.MType, metric.ID, *metric.Delta)
 	default:
 		http.Error(w, "Invalid metric type", http.StatusBadRequest)
 		return
@@ -95,10 +102,11 @@ func (h *Handler) UpdateMetricJSONHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) GetMetricValueHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
 
-	value, err := h.metricsService.GetMetricValue(metricType, metricName)
+	value, err := h.metricsService.GetMetricValue(ctx, metricType, metricName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -108,7 +116,7 @@ func (h *Handler) GetMetricValueHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) GetMetricValueJSONHandler(w http.ResponseWriter, r *http.Request) {
-
+	ctx := r.Context()
 	var m model.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -120,7 +128,7 @@ func (h *Handler) GetMetricValueJSONHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	value, err := h.metricsService.GetMetricValue(m.MType, m.ID)
+	value, err := h.metricsService.GetMetricValue(ctx, m.MType, m.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -141,8 +149,18 @@ func (h *Handler) GetMetricValueJSONHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) ListMetricsHandler(w http.ResponseWriter, r *http.Request) {
-	gauges := h.metricsService.GetGauges()
-	counters := h.metricsService.GetCounters()
+	ctx := r.Context()
+	gauges, err := h.metricsService.GetGauges(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	counters, err := h.metricsService.GetCounters(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
 
 	tmpl := `
 		<html>

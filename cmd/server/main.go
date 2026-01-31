@@ -13,18 +13,29 @@ import (
 	"github.com/idudko/go-musthave-metrics/internal/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
 	"github.com/idudko/go-musthave-metrics/internal/service"
+	"github.com/ilyakaznacheev/cleanenv"
 )
 
-func main() {
-	defaultAddress := "localhost:8080"
-	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
-		defaultAddress = envAddress
+type Config struct {
+	Address         string `env:"ADDRESS"`
+	StoreInterval   int    `env:"STORE_INTERVAL"`
+	FileStoragePath string `env:"FILE_STORAGE_PATH"`
+	Restore         bool   `env:"RESTORE"`
+}
+
+var config = Config{
+	Address:         "localhost:8080",
+	StoreInterval:   300,
+	FileStoragePath: "metrics.json",
+	Restore:         false,
+}
+
+func newServer(config Config) (*chi.Mux, error) {
+	storage, err := repository.NewFileStorage(config.FileStoragePath, config.StoreInterval, config.Restore)
+	if err != nil {
+		log.Fatalf("Failed to create storage: %v", err)
 	}
 
-	address := flag.String("a", defaultAddress, "HTTP address to listen on")
-	flag.Parse()
-
-	storage := repository.NewMemStorage()
 	metricsService := service.NewMetricsService(storage)
 	h := handler.NewHandler(metricsService)
 
@@ -40,6 +51,29 @@ func main() {
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
 
-	fmt.Printf("Server is running on %s\n", *address)
-	log.Fatal(http.ListenAndServe(*address, r))
+	return r, nil
+}
+
+func main() {
+
+	if err := cleanenv.ReadEnv(&config); err != nil {
+		log.Fatalf("Failed to read config from env: %v", err)
+	}
+
+	fset := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	fset.StringVar(&config.Address, "a", config.Address, "HTTP address to listen on")
+	fset.IntVar(&config.StoreInterval, "i", config.StoreInterval, "Store interval in seconds (0 = synchronous)")
+	fset.StringVar(&config.FileStoragePath, "f", config.FileStoragePath, "Path to file storage")
+	fset.BoolVar(&config.Restore, "r", config.Restore, "Restore metrics from file")
+
+	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
+	fset.Parse(os.Args[1:])
+
+	r, err := newServer(config)
+	if err != nil {
+		log.Fatalf("Failed to create server: %v", err)
+	}
+
+	fmt.Printf("Server is running on %s\n", config.Address)
+	log.Fatal(http.ListenAndServe(config.Address, r))
 }
