@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/hashicorp/go-retryablehttp"
 )
 
 type AuditEvent struct {
@@ -24,6 +27,7 @@ type Observer interface {
 
 type FileObserver struct {
 	filePath string
+	mu       sync.Mutex
 }
 
 func NewFileObserver(filePath string) *FileObserver {
@@ -33,6 +37,9 @@ func NewFileObserver(filePath string) *FileObserver {
 }
 
 func (o *FileObserver) Notify(event AuditEvent) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
 	file, err := os.OpenFile(o.filePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		log.Printf("Failed to open audit file: %v", err)
@@ -52,12 +59,21 @@ func (o *FileObserver) Notify(event AuditEvent) {
 }
 
 type HTTPObserver struct {
-	url string
+	client *retryablehttp.Client
+	url    string
 }
 
 func NewHTTPObserver(url string) *HTTPObserver {
+	retryClient := retryablehttp.NewClient()
+	retryClient.RetryMax = 3
+	retryClient.RetryWaitMax = 10 * time.Second
+	retryClient.RetryWaitMin = 1 * time.Second
+	retryClient.CheckRetry = retryablehttp.DefaultRetryPolicy
+	retryClient.Logger = nil // Отключаем логирование клиента, используем свой логгер
+
 	return &HTTPObserver{
-		url: url,
+		client: retryClient,
+		url:    url,
 	}
 }
 
@@ -68,9 +84,16 @@ func (o *HTTPObserver) Notify(event AuditEvent) {
 		return
 	}
 
-	resp, err := http.Post(o.url, "application/json", bytes.NewBuffer(data))
+	req, err := retryablehttp.NewRequest(http.MethodPost, o.url, bytes.NewBuffer(data))
 	if err != nil {
-		log.Printf("Failed to send audit event: %v", err)
+		log.Printf("Failed to create request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.client.Do(req)
+	if err != nil {
+		log.Printf("Failed to send audit event after retries: %v", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -82,6 +105,7 @@ func (o *HTTPObserver) Notify(event AuditEvent) {
 
 type Subject struct {
 	observers []Observer
+	mu        sync.RWMutex
 }
 
 func NewSubject() *Subject {
@@ -91,10 +115,14 @@ func NewSubject() *Subject {
 }
 
 func (s *Subject) Attach(observer Observer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.observers = append(s.observers, observer)
 }
 
 func (s *Subject) Detach(observer Observer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, obs := range s.observers {
 		if obs == observer {
 			s.observers = append(s.observers[:i], s.observers[i+1:]...)
@@ -104,7 +132,12 @@ func (s *Subject) Detach(observer Observer) {
 }
 
 func (s *Subject) NotifyAll(event AuditEvent) {
-	for _, observer := range s.observers {
+	s.mu.RLock()
+	observers := make([]Observer, len(s.observers))
+	copy(observers, s.observers)
+	s.mu.RUnlock()
+
+	for _, observer := range observers {
 		observer.Notify(event)
 	}
 }
