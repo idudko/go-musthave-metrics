@@ -69,13 +69,13 @@ func (c *Collector) Report(serverAddress string) error {
 	defer c.mu.Unlock()
 
 	for name, value := range c.gauges {
-		url := fmt.Sprintf("%s/update/gauge/%s/%f", serverAddress, name, value)
+		url := fmt.Sprintf("http://%s/update/gauge/%s/%f", serverAddress, name, value)
 		if err := sendMetric(url); err != nil {
 			return err
 		}
 	}
 	for name, value := range c.counters {
-		url := fmt.Sprintf("%s/update/counter/%s/%d", serverAddress, name, value)
+		url := fmt.Sprintf("http://%s/update/counter/%s/%d", serverAddress, name, value)
 		if err := sendMetric(url); err != nil {
 			return err
 		}
