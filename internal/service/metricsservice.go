@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
@@ -102,4 +103,45 @@ func (s *MetricsService) GetCounters(ctx context.Context) (map[string]int64, err
 	}
 
 	return s.storage.GetCounters(ctx)
+}
+
+func (s *MetricsService) UpdateMetricsBatch(ctx context.Context, metrics []model.Metrics) error {
+
+	type batchStorage interface {
+		UpdateMetricsBatch(ctx context.Context, metrics []model.Metrics) error
+	}
+
+	if batchStorage, ok := s.storage.(batchStorage); ok {
+		return batchStorage.UpdateMetricsBatch(ctx, metrics)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	for _, metric := range metrics {
+		var err error
+		switch metric.MType {
+		case model.Gauge:
+			if metric.Value == nil {
+				return fmt.Errorf("%s metric value is nil", metric.MType)
+			}
+			err = s.storage.UpdateGauge(ctx, metric.ID, *metric.Value)
+		case model.Counter:
+			if metric.Delta == nil {
+				return fmt.Errorf("%s metric delta is nil", metric.MType)
+			}
+			err = s.storage.UpdateCounter(ctx, metric.ID, *metric.Delta)
+		default:
+			return fmt.Errorf("invalid metric type: %s", metric.MType)
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

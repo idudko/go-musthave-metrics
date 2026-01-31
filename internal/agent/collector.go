@@ -96,6 +96,33 @@ func (c *Collector) Report(serverAddress string) error {
 	return nil
 }
 
+func (c *Collector) ReportBatch(serverAddress string) error {
+
+	metrics := make([]*model.Metrics, 0, len(c.counters)+len(c.gauges))
+
+	for name, value := range c.counters {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Counter,
+			Delta: &value,
+		}
+		metrics = append(metrics, &m)
+	}
+	for name, value := range c.gauges {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Gauge,
+			Value: &value,
+		}
+		metrics = append(metrics, &m)
+	}
+
+	if len(metrics) == 0 {
+		return nil
+	}
+	return sendMetricsBatch(serverAddress, metrics)
+}
+
 func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	url := fmt.Sprintf("http://%s/update", serverAddress)
 	data, err := json.Marshal(m)
@@ -120,6 +147,43 @@ func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	req.Header.Set("Content-Encoding", "gzip")
 
 	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
+	url := fmt.Sprintf("http://%s/updates", serverAddress)
+	data, err := json.Marshal(metrics)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metrics: %w", err)
+	}
+
+	var b bytes.Buffer
+	gw := gzip.NewWriter(&b)
+	if _, err := gw.Write(data); err != nil {
+		return fmt.Errorf("failed to write data to gzip writer: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, &b)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

@@ -43,7 +43,6 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 		if err != nil {
 			log.Fatalf("failed to create database storage: %v", err)
 		}
-		//defer dbStorage.Close()
 		storage = dbStorage
 		pinger = dbStorage
 	} else {
@@ -56,9 +55,6 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	metricsService := service.NewMetricsService(storage)
 	h := handler.NewHandler(metricsService)
 
-	// dbmetricsService := service.NewDBMetricsService(pool)
-	// dbH := handler.NewDBHandler(dbmetricsService)
-
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
@@ -66,6 +62,7 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Use(middleware.GzipRequestMiddleware)
 	r.Use(chimiddleware.Compress(5, "application/json", "text/html"))
 	r.Post("/update", h.UpdateMetricJSONHandler)
+	r.Post("/updates", h.UpdateMetricsBatchHandler)
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
 	r.Post("/value", h.GetMetricValueJSONHandler)
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
