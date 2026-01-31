@@ -3,7 +3,6 @@ package handler
 import (
 	"fmt"
 	"html/template"
-	"io"
 	"net/http"
 	"strconv"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/internal/service"
+	"github.com/idudko/go-musthave-metrics/pkg/hash"
 )
 
 const (
@@ -20,10 +20,14 @@ const (
 
 type Handler struct {
 	metricsService *service.MetricsService
+	key            string
 }
 
-func NewHandler(metricsService *service.MetricsService) *Handler {
-	return &Handler{metricsService: metricsService}
+func NewHandler(metricsService *service.MetricsService, key string) *Handler {
+	return &Handler{
+		metricsService: metricsService,
+		key:            key,
+	}
 }
 
 func (h *Handler) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +103,35 @@ func (h *Handler) UpdateMetricJSONHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	value, err := h.metricsService.GetMetricValue(ctx, metric.MType, metric.ID)
+	if err == nil {
+		switch metric.MType {
+		case model.Gauge:
+			if v, ok := value.(float64); ok {
+				metric.Value = &v
+			}
+		case model.Counter:
+			if v, ok := value.(int64); ok {
+				metric.Delta = &v
+			}
+		}
+	}
+
+	data, err := json.Marshal(metric)
+	if err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if h.key != "" {
+		hashValue := hash.ComputeHash(data, h.key)
+		w.Header().Set("HashSHA256", hashValue)
+	}
+
 	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 func (h *Handler) GetMetricValueHandler(w http.ResponseWriter, r *http.Request) {
@@ -124,8 +156,6 @@ func (h *Handler) GetMetricValueJSONHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	fmt.Print(io.ReadAll(r.Body))
-
 	if m.ID == "" || m.MType == "" {
 		http.Error(w, "Invalid metric data", http.StatusBadRequest)
 		return
@@ -147,8 +177,62 @@ func (h *Handler) GetMetricValueJSONHandler(w http.ResponseWriter, r *http.Reque
 			m.Delta = &v
 		}
 	}
+
+	data, err := json.Marshal(m)
+	if err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+
+	if h.key != "" {
+		hashValue := hash.ComputeHash(data, h.key)
+		w.Header().Set("HashSHA256", hashValue)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m)
+	w.Write(data)
+}
+
+func (h *Handler) UpdateMetricsBatchHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var metrics []model.Metrics
+	if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	for _, metric := range metrics {
+		if metric.ID == "" || metric.MType == "" {
+			http.Error(w, "Invalid metric data", http.StatusBadRequest)
+			return
+		}
+
+		var err error
+		switch metric.MType {
+		case MetricTypeGauge:
+			if metric.Value == nil {
+				http.Error(w, "Value is required for gauge", http.StatusBadRequest)
+				return
+			}
+			err = h.metricsService.UpdateMetric(ctx, metric.MType, metric.ID, *metric.Value)
+		case MetricTypeCounter:
+			if metric.Delta == nil {
+				http.Error(w, "Delta is required for counter", http.StatusBadRequest)
+				return
+			}
+			err = h.metricsService.UpdateMetric(ctx, metric.MType, metric.ID, *metric.Delta)
+		default:
+			http.Error(w, "Invalid metric type", http.StatusBadRequest)
+			return
+		}
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) ListMetricsHandler(w http.ResponseWriter, r *http.Request) {

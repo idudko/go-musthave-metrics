@@ -7,11 +7,13 @@ import (
 	"math/rand"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/idudko/go-musthave-metrics/internal/model"
+	"github.com/idudko/go-musthave-metrics/pkg/hash"
 )
 
 type Collector struct {
@@ -19,12 +21,14 @@ type Collector struct {
 	gauges    map[string]float64
 	counters  map[string]int64
 	pollCount int64
+	key       string
 }
 
-func NewCollector() *Collector {
+func NewCollector(key string) *Collector {
 	return &Collector{
 		gauges:   make(map[string]float64),
 		counters: make(map[string]int64),
+		key:      key,
 	}
 }
 
@@ -79,7 +83,7 @@ func (c *Collector) Report(serverAddress string) error {
 			MType: model.Gauge,
 			Value: &value,
 		}
-		if err := sendMetricJSON(serverAddress, &m); err != nil {
+		if err := c.sendMetricJSON(serverAddress, &m); err != nil {
 			return err
 		}
 	}
@@ -89,7 +93,7 @@ func (c *Collector) Report(serverAddress string) error {
 			MType: model.Counter,
 			Delta: &value,
 		}
-		if err := sendMetricJSON(serverAddress, &m); err != nil {
+		if err := c.sendMetricJSON(serverAddress, &m); err != nil {
 			return err
 		}
 	}
@@ -97,6 +101,8 @@ func (c *Collector) Report(serverAddress string) error {
 }
 
 func (c *Collector) ReportBatch(serverAddress string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	metrics := make([]*model.Metrics, 0, len(c.counters)+len(c.gauges))
 
@@ -120,14 +126,14 @@ func (c *Collector) ReportBatch(serverAddress string) error {
 	if len(metrics) == 0 {
 		return nil
 	}
-	return sendMetricsBatch(serverAddress, metrics)
+	return c.sendMetricsBatch(serverAddress, metrics)
 }
 
-func sendMetricJSON(serverAddress string, m *model.Metrics) error {
+func (c *Collector) sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	url := fmt.Sprintf("http://%s/update", serverAddress)
 	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
 
-	err := doSendMetricJSON(url, m)
+	err := c.doSendMetricJSON(url, m)
 	if err == nil {
 		return nil
 	}
@@ -135,7 +141,7 @@ func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	for _, interval := range retryIntervals {
 		time.Sleep(interval)
 
-		err = doSendMetricJSON(url, m)
+		err = c.doSendMetricJSON(url, m)
 		if err == nil {
 			return nil
 		}
@@ -144,7 +150,7 @@ func sendMetricJSON(serverAddress string, m *model.Metrics) error {
 	return err
 }
 
-func doSendMetricJSON(url string, m *model.Metrics) error {
+func (c *Collector) doSendMetricJSON(url string, m *model.Metrics) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -159,12 +165,18 @@ func doSendMetricJSON(url string, m *model.Metrics) error {
 		return err
 	}
 
+	compressed := b.Bytes()
 	req, err := http.NewRequest(http.MethodPost, url, &b)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+
+	if c.key != "" {
+		hashValue := hash.ComputeHash(compressed, c.key)
+		req.Header.Set("HashSHA256", hashValue)
+	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
@@ -179,19 +191,23 @@ func doSendMetricJSON(url string, m *model.Metrics) error {
 	return nil
 }
 
-func sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
+func (c *Collector) sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
 	url := fmt.Sprintf("http://%s/updates", serverAddress)
 	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
 
-	err := doSendMetricsBatch(url, metrics)
+	err := c.doSendMetricsBatch(url, metrics)
 	if err == nil {
+		return nil
+	}
+
+	if strings.Contains(err.Error(), "400") {
 		return nil
 	}
 
 	for _, interval := range retryIntervals {
 		time.Sleep(interval)
 
-		err = doSendMetricsBatch(url, metrics)
+		err = c.doSendMetricsBatch(url, metrics)
 		if err == nil {
 			return nil
 		}
@@ -200,8 +216,7 @@ func sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
 	return err
 }
 
-func doSendMetricsBatch(url string, metrics []*model.Metrics) error {
-
+func (c *Collector) doSendMetricsBatch(url string, metrics []*model.Metrics) error {
 	data, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metrics: %w", err)
@@ -215,7 +230,7 @@ func doSendMetricsBatch(url string, metrics []*model.Metrics) error {
 	if err := gw.Close(); err != nil {
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
-
+	compressed := b.Bytes()
 	req, err := http.NewRequest(http.MethodPost, url, &b)
 	if err != nil {
 		return err
@@ -223,6 +238,11 @@ func doSendMetricsBatch(url string, metrics []*model.Metrics) error {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+
+	if c.key != "" {
+		hashValue := hash.ComputeHash(compressed, c.key)
+		req.Header.Set("HashSHA256", hashValue)
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)

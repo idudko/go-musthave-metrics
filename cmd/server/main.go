@@ -23,6 +23,7 @@ type Config struct {
 	FileStoragePath string `env:"FILE_STORAGE_PATH"`
 	Restore         bool   `env:"RESTORE"`
 	DSN             string `env:"DATABASE_DSN"`
+	Key             string `env:"KEY"`
 }
 
 var config = Config{
@@ -31,6 +32,7 @@ var config = Config{
 	FileStoragePath: "",
 	Restore:         false,
 	DSN:             "",
+	Key:             "",
 }
 
 func newServer(config Config) (*chi.Mux, repository.Storage, error) {
@@ -53,14 +55,16 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	}
 
 	metricsService := service.NewMetricsService(storage)
-	h := handler.NewHandler(metricsService)
+	h := handler.NewHandler(metricsService, config.Key)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.HashValidationMiddleware(config.Key))
 	r.Use(middleware.GzipRequestMiddleware)
 	r.Use(chimiddleware.Compress(5, "application/json", "text/html"))
+
 	r.Post("/update", h.UpdateMetricJSONHandler)
 	r.Post("/updates", h.UpdateMetricsBatchHandler)
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
@@ -77,7 +81,6 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 }
 
 func main() {
-
 	if err := cleanenv.ReadEnv(&config); err != nil {
 		log.Fatalf("Failed to read config from env: %v", err)
 	}
@@ -88,7 +91,7 @@ func main() {
 	fset.StringVar(&config.FileStoragePath, "f", config.FileStoragePath, "Path to file storage")
 	fset.BoolVar(&config.Restore, "r", config.Restore, "Restore metrics from file")
 	fset.StringVar(&config.DSN, "d", config.DSN, "PostgreSQL DSN")
-
+	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
@@ -96,10 +99,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
+
 	if closer, ok := storage.(io.Closer); ok {
 		defer closer.Close()
 	}
 
 	fmt.Printf("Server is running on %s\n", config.Address)
+	if config.Key != "" {
+		fmt.Println("Hash validation enabled")
+	}
 	log.Fatal(http.ListenAndServe(config.Address, r))
 }

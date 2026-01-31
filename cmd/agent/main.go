@@ -15,6 +15,7 @@ type Config struct {
 	PollInterval   int    `env:"POLL_INTERVAL"`
 	ReportInterval int    `env:"REPORT_INTERVAL"`
 	UseBatch       bool   `env:"BATCH"`
+	Key            string `env:"KEY"`
 }
 
 var config = Config{
@@ -22,10 +23,10 @@ var config = Config{
 	PollInterval:   2,
 	ReportInterval: 10,
 	UseBatch:       true,
+	Key:            "",
 }
 
 func main() {
-
 	if err := cleanenv.ReadEnv(&config); err != nil {
 		log.Fatalf("Failed to read config from env: %v", err)
 	}
@@ -35,20 +36,25 @@ func main() {
 	fset.IntVar(&config.PollInterval, "p", config.PollInterval, "Poll interval in seconds")
 	fset.IntVar(&config.ReportInterval, "r", config.ReportInterval, "Report interval in seconds")
 	fset.BoolVar(&config.UseBatch, "b", config.UseBatch, "Use batch reporting")
-
+	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
-	collector := agent.NewCollector()
+	collector := agent.NewCollector(config.Key)
 	pollsSinceReport := 0
 
 	for {
 		collector.Collect()
 		time.Sleep(time.Duration(config.PollInterval) * time.Second)
-
 		pollsSinceReport++
+
 		if pollsSinceReport >= (config.ReportInterval / config.PollInterval) {
-			err := collector.Report(config.Address)
+			var err error
+			if config.UseBatch {
+				err = collector.ReportBatch(config.Address)
+			} else {
+				err = collector.Report(config.Address)
+			}
 			if err != nil {
 				log.Printf("error reporting metrics: %v", err)
 			}
