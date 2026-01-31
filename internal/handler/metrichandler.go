@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"html/template"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -32,4 +34,51 @@ func (h *Handler) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) GetMetricValueHandler(w http.ResponseWriter, r *http.Request) {
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+
+	value, err := h.metricsService.GetMetricValue(metricType, metricName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	fmt.Fprintf(w, "%v", value)
+}
+
+func (h *Handler) ListMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	gauges := h.metricsService.GetGauges()
+	counters := h.metricsService.GetCounters()
+
+	tmpl := `
+		<html>
+			<head>
+				<title>Metrics</title>
+			</head>
+			<body>
+				<div>
+					{{range $name, $value := .Gauges}}
+						{{$name}}: {{$value}}<br/>
+					{{end}}
+					{{range $name, $value := .Counters}}
+						{{$name}}: {{$value}}<br/>
+					{{end}}
+				</div>
+			</body>
+		</html>
+	`
+
+	data := struct {
+		Gauges   map[string]float64
+		Counters map[string]int64
+	}{
+		Gauges:   gauges,
+		Counters: counters,
+	}
+
+	t := template.Must(template.New("metrics").Parse(tmpl))
+	t.Execute(w, data)
 }

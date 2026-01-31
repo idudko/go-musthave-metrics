@@ -21,6 +21,8 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Post("/update/{type}/{name}/{value}", h.UpdateMetricHandler)
+	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
+	r.Get("/", h.ListMetricsHandler)
 
 	fmt.Println("Server is running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", r))
