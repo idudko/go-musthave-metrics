@@ -1,19 +1,14 @@
 package agent
 
 import (
-	"bytes"
-	"compress/gzip"
 	"fmt"
 	"math/rand"
-	"net/http"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
-	"github.com/idudko/go-musthave-metrics/internal/model"
-	"github.com/idudko/go-musthave-metrics/pkg/hash"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type Collector struct {
@@ -73,186 +68,39 @@ func (c *Collector) Collect() {
 	c.counters["PollCount"] = c.pollCount
 }
 
-func (c *Collector) Report(serverAddress string) error {
+func (c *Collector) CollectSystemMetrics() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for name, value := range c.gauges {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Gauge,
-			Value: &value,
-		}
-		if err := c.sendMetricJSON(serverAddress, &m); err != nil {
-			return err
+	vmStat, err := mem.VirtualMemory()
+	if err == nil {
+		c.gauges["TotalMemory"] = float64(vmStat.Total)
+		c.gauges["FreeMemory"] = float64(vmStat.Free)
+	}
+
+	// Используем true для получения per-CPU метрик
+	cpuPercents, err := cpu.Percent(time.Second, true)
+	if err == nil && len(cpuPercents) > 0 {
+		for i, percent := range cpuPercents {
+			c.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = percent
 		}
 	}
-	for name, value := range c.counters {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Counter,
-			Delta: &value,
-		}
-		if err := c.sendMetricJSON(serverAddress, &m); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
-func (c *Collector) ReportBatch(serverAddress string) error {
+func (c *Collector) GetMetrics() (map[string]float64, map[string]int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	metrics := make([]*model.Metrics, 0, len(c.counters)+len(c.gauges))
+	gaugesCopy := make(map[string]float64, len(c.gauges))
+	countersCopy := make(map[string]int64, len(c.counters))
 
-	for name, value := range c.counters {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Counter,
-			Delta: &value,
-		}
-		metrics = append(metrics, &m)
-	}
-	for name, value := range c.gauges {
-		m := model.Metrics{
-			ID:    name,
-			MType: model.Gauge,
-			Value: &value,
-		}
-		metrics = append(metrics, &m)
+	for k, v := range c.gauges {
+		gaugesCopy[k] = v
 	}
 
-	if len(metrics) == 0 {
-		return nil
-	}
-	return c.sendMetricsBatch(serverAddress, metrics)
-}
-
-func (c *Collector) sendMetricJSON(serverAddress string, m *model.Metrics) error {
-	url := fmt.Sprintf("http://%s/update", serverAddress)
-	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
-
-	err := c.doSendMetricJSON(url, m)
-	if err == nil {
-		return nil
+	for k, v := range c.counters {
+		countersCopy[k] = v
 	}
 
-	for _, interval := range retryIntervals {
-		time.Sleep(interval)
-
-		err = c.doSendMetricJSON(url, m)
-		if err == nil {
-			return nil
-		}
-	}
-
-	return err
-}
-
-func (c *Collector) doSendMetricJSON(url string, m *model.Metrics) error {
-	data, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-
-	var b bytes.Buffer
-	gw := gzip.NewWriter(&b)
-	if _, err := gw.Write(data); err != nil {
-		return err
-	}
-	if err := gw.Close(); err != nil {
-		return err
-	}
-
-	compressed := b.Bytes()
-	req, err := http.NewRequest(http.MethodPost, url, &b)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-
-	if c.key != "" {
-		hashValue := hash.ComputeHash(compressed, c.key)
-		req.Header.Set("HashSHA256", hashValue)
-	}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (c *Collector) sendMetricsBatch(serverAddress string, metrics []*model.Metrics) error {
-	url := fmt.Sprintf("http://%s/updates", serverAddress)
-	retryIntervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
-
-	err := c.doSendMetricsBatch(url, metrics)
-	if err == nil {
-		return nil
-	}
-
-	if strings.Contains(err.Error(), "400") {
-		return nil
-	}
-
-	for _, interval := range retryIntervals {
-		time.Sleep(interval)
-
-		err = c.doSendMetricsBatch(url, metrics)
-		if err == nil {
-			return nil
-		}
-	}
-
-	return err
-}
-
-func (c *Collector) doSendMetricsBatch(url string, metrics []*model.Metrics) error {
-	data, err := json.Marshal(metrics)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metrics: %w", err)
-	}
-
-	var b bytes.Buffer
-	gw := gzip.NewWriter(&b)
-	if _, err := gw.Write(data); err != nil {
-		return fmt.Errorf("failed to write data to gzip writer: %w", err)
-	}
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-	compressed := b.Bytes()
-	req, err := http.NewRequest(http.MethodPost, url, &b)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-
-	if c.key != "" {
-		hashValue := hash.ComputeHash(compressed, c.key)
-		req.Header.Set("HashSHA256", hashValue)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	return nil
+	return gaugesCopy, countersCopy
 }
