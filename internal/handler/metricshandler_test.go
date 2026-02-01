@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/goccy/go-json"
+
 	"github.com/idudko/go-musthave-metrics/internal/model"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
 	"github.com/idudko/go-musthave-metrics/internal/service"
@@ -15,8 +16,8 @@ import (
 
 func TestUpdateMetricsHandler(t *testing.T) {
 	storage := repository.NewMemStorage()
-	service := service.NewMetricsService(storage)
-	handler := NewHandler(service, "")
+	metricsService := service.NewMetricsService(storage)
+	handler := NewHandler(metricsService, "")
 
 	r := chi.NewRouter()
 	r.Post("/update/{type}/{name}/{value}", handler.UpdateMetricHandler)
@@ -78,11 +79,4 @@ func TestUpdateMetricsHandler(t *testing.T) {
 			}
 		})
 	}
-}
-func float64Ptr(v float64) *float64 {
-	return &v
-}
-
-func int64Ptr(v int64) *int64 {
-	return &v
 }

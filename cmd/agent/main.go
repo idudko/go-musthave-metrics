@@ -7,8 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/idudko/go-musthave-metrics/internal/agent"
 	"github.com/ilyakaznacheev/cleanenv"
+
+	"github.com/idudko/go-musthave-metrics/internal/agent"
 )
 
 type Config struct {
