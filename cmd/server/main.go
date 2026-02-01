@@ -50,14 +50,14 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	if config.DSN != "" {
 		dbStorage, err := repository.NewDBStorage(config.DSN)
 		if err != nil {
-			log.Fatalf("failed to create database storage: %v", err)
+			return nil, nil, fmt.Errorf("failed to create database storage: %v", err)
 		}
 		storage = dbStorage
 		pinger = dbStorage
 	} else {
 		storage, err = repository.NewFileStorage(config.FileStoragePath, config.StoreInterval, config.Restore)
 		if err != nil {
-			log.Fatalf("failed to create file storage: %v", err)
+			return nil, nil, fmt.Errorf("failed to create file storage: %v", err)
 		}
 	}
 
