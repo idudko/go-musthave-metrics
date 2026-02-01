@@ -157,13 +157,17 @@ func ExamplePool_memoryReuse() {
 func BenchmarkPoolWithoutPool(b *testing.B) {
 	// Benchmark without pool - allocate new objects
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		obj := &BufferedStruct{}
 		obj.Name = "test"
 		obj.Count = 42
 		obj.Data = append(obj.Data, 1, 2, 3)
 		obj.Items = append(obj.Items, "a", "b")
 		obj.Counter++
+		// Use Name and Count to avoid linter warnings
+		_ = obj.Name
+		obj.Count++
+		_ = obj
 	}
 }
 
@@ -178,13 +182,14 @@ func BenchmarkPoolWithPool(b *testing.B) {
 		}
 	})
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		obj := p.Get()
 		obj.Name = "test"
 		obj.Count = 42
 		obj.Data = append(obj.Data, 1, 2, 3)
 		obj.Items = append(obj.Items, "a", "b")
 		obj.Counter++
+		obj.Count++ // Use Count to avoid linter warning
 		p.Put(obj)
 	}
 }

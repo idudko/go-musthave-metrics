@@ -141,12 +141,12 @@ func TestPool_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
-			for j := 0; j < iterationsPerGoroutine; j++ {
+			for j := range iterationsPerGoroutine {
 				obj := p.Get()
 
 				// Modify object
@@ -338,14 +338,14 @@ func TestPool_MultiplePutGet(t *testing.T) {
 	})
 
 	// Put multiple objects
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		obj := p.Get()
 		obj.ID = i
 		p.Put(obj)
 	}
 
 	// Get them back
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		obj := p.Get()
 		if obj.ID != 0 {
 			t.Errorf("expected ID to be 0, got %d", obj.ID)
@@ -418,7 +418,6 @@ func BenchmarkPool_GetPut(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			obj := p.Get()
-			obj.ID = 42
 			obj.Items = append(obj.Items, "item1", "item2", "item3")
 			p.Put(obj)
 		}
@@ -432,9 +431,10 @@ func BenchmarkPool_NoPool(b *testing.B) {
 				Items:  make([]string, 0, 10),
 				Config: make(map[string]string),
 			}
-			obj.ID = 42
 			obj.Items = append(obj.Items, "item1", "item2", "item3")
 			// No pool, object is just garbage collected
+			_ = obj.Config
+			_ = obj
 		}
 	})
 }

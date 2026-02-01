@@ -10,6 +10,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -106,38 +107,38 @@ func main() {
 func generateForPackage(pkgPath string) error {
 	fset := token.NewFileSet()
 
-	// Парсим все .go файлы в пакете (кроме _gen.go и _test.go)
-	filter := func(fi os.FileInfo) bool {
-		name := fi.Name()
-		return !strings.HasSuffix(name, "_test.go") && !strings.HasSuffix(name, "_gen.go")
-	}
-
-	pkgs, err := parser.ParseDir(fset, pkgPath, filter, parser.ParseComments)
+	// Получаем список Go файлов (кроме _gen.go и _test.go)
+	files, err := filepath.Glob(filepath.Join(pkgPath, "*.go"))
 	if err != nil {
-		return fmt.Errorf("error parsing directory: %w", err)
+		return fmt.Errorf("error listing files: %w", err)
 	}
 
-	if len(pkgs) == 0 {
-		return nil
-	}
-
-	// Берем первый пакет (обычно их один)
-	var pkg *ast.Package
-	for _, p := range pkgs {
-		pkg = p
-		break
-	}
-
-	if pkg == nil {
-		return nil
-	}
-
-	// Собираем все AST файлы
+	// Парсим все подходящие .go файлы
 	var astFiles []*ast.File
-	var filePaths []string
-	for _, file := range pkg.Files {
-		astFiles = append(astFiles, file)
-		filePaths = append(filePaths, fset.File(file.Pos()).Name())
+	var pkgName string
+	for _, file := range files {
+		// Пропускаем тестовые и сгенерированные файлы
+		if strings.HasSuffix(file, "_test.go") || strings.HasSuffix(file, "_gen.go") {
+			continue
+		}
+
+		// Парсим файл
+		src, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("error reading file %s: %w", file, err)
+		}
+
+		astFile, err := parser.ParseFile(fset, file, src, parser.ParseComments)
+		if err != nil {
+			return fmt.Errorf("error parsing file %s: %w", file, err)
+		}
+
+		// Получаем имя пакета из первого файла
+		if pkgName == "" {
+			pkgName = astFile.Name.Name
+		}
+
+		astFiles = append(astFiles, astFile)
 	}
 
 	if len(astFiles) == 0 {
@@ -153,7 +154,7 @@ func generateForPackage(pkgPath string) error {
 
 	// Проверяем типы
 	conf := types.Config{}
-	_, err = conf.Check(pkgPath, fset, astFiles, info)
+	_, err = conf.Check(pkgName, fset, astFiles, info)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: type checking failed for %s: %v (continuing anyway)\n", pkgPath, err)
 	}
@@ -161,7 +162,8 @@ func generateForPackage(pkgPath string) error {
 	// Находим структуры с комментарием // generate:reset
 	var structs []*StructInfo
 	for _, file := range astFiles {
-		fileStructs := findStructsWithReset(fset, file, info, pkg.Name, fset.File(file.Pos()).Name())
+		filePath := fset.File(file.Pos()).Name()
+		fileStructs := findStructsWithReset(fset, file, info, pkgName, filePath)
 		structs = append(structs, fileStructs...)
 	}
 
@@ -170,7 +172,7 @@ func generateForPackage(pkgPath string) error {
 	}
 
 	// Генерируем код для reset.gen.go
-	code := generateResetCode(pkg.Name, structs)
+	code := generateResetCode(pkgName, structs)
 
 	// Записываем в файл
 	outputPath := filepath.Join(pkgPath, "reset.gen.go")
@@ -204,7 +206,7 @@ func findStructsWithReset(fset *token.FileSet, file *ast.File, info *types.Info,
 			}
 
 			// Собираем информацию о полях
-			fields := collectFieldInfo(fset, structType.Fields.List, info)
+			fields := collectFieldInfo(structType.Fields.List, info)
 
 			// Проверяем, есть ли у самой структуры метод Reset
 			hasReset := hasResetMethodForType(typeSpec.Name.Name)
@@ -223,7 +225,7 @@ func findStructsWithReset(fset *token.FileSet, file *ast.File, info *types.Info,
 }
 
 // collectFieldInfo собирает информацию о полях структуры
-func collectFieldInfo(fset *token.FileSet, fieldList []*ast.Field, info *types.Info) []*FieldInfo {
+func collectFieldInfo(fieldList []*ast.Field, info *types.Info) []*FieldInfo {
 	var fields []*FieldInfo
 
 	for _, field := range fieldList {
@@ -320,68 +322,68 @@ func generateFieldReset(buf *bytes.Buffer, field *FieldInfo, receiver string) {
 	// Проверяем тип поля и генерируем соответствующий код
 	switch {
 	case field.IsPointer:
-		buf.WriteString(fmt.Sprintf("\tif %s != nil {\n", fieldAccess))
+		fmt.Fprintf(buf, "\tif %s != nil {\n", fieldAccess)
 
 		// Получаем базовый тип указателя
 		baseType := getBaseType(field.TypeStr)
 
 		switch {
 		case isStringType(baseType):
-			buf.WriteString(fmt.Sprintf("\t\t*%s = \"\"\n", fieldAccess))
+			fmt.Fprintf(buf, "\t\t*%s = \"\"\n", fieldAccess)
 		case isBoolType(baseType):
-			buf.WriteString(fmt.Sprintf("\t\t*%s = false\n", fieldAccess))
+			fmt.Fprintf(buf, "\t\t*%s = false\n", fieldAccess)
 		case isNumericType(baseType):
-			buf.WriteString(fmt.Sprintf("\t\t*%s = 0\n", fieldAccess))
+			fmt.Fprintf(buf, "\t\t*%s = 0\n", fieldAccess)
 		case field.HasReset:
-			buf.WriteString(fmt.Sprintf("\t\t%s.Reset()\n", fieldAccess))
+			fmt.Fprintf(buf, "\t\t%s.Reset()\n", fieldAccess)
 		default:
 			// Для структур без Reset обнуляем
-			buf.WriteString(fmt.Sprintf("\t\t*%s = %s{}\n", fieldAccess, baseType))
+			fmt.Fprintf(buf, "\t\t*%s = %s{}\n", fieldAccess, baseType)
 		}
 
 		buf.WriteString("\t}\n")
 
 	case field.IsSlice:
 		// Обрезаем слайс (с проверкой на nil)
-		buf.WriteString(fmt.Sprintf("\tif %s != nil {\n", fieldAccess))
-		buf.WriteString(fmt.Sprintf("\t\t%s = %s[:0]\n", fieldAccess, fieldAccess))
+		fmt.Fprintf(buf, "\tif %s != nil {\n", fieldAccess)
+		fmt.Fprintf(buf, "\t\t%s = %s[:0]\n", fieldAccess, fieldAccess)
 		buf.WriteString("\t}\n")
 
 	case field.IsMap:
 		// Очищаем карту (с проверкой на nil)
-		buf.WriteString(fmt.Sprintf("\tif %s != nil {\n", fieldAccess))
-		buf.WriteString(fmt.Sprintf("\t\tclear(%s)\n", fieldAccess))
+		fmt.Fprintf(buf, "\tif %s != nil {\n", fieldAccess)
+		fmt.Fprintf(buf, "\t\tclear(%s)\n", fieldAccess)
 		buf.WriteString("\t}\n")
 
 	case field.IsArray:
 		// Обнуляем массив
-		buf.WriteString(fmt.Sprintf("\t%s = [len(%s)]%s{}\n", fieldAccess, fieldAccess, getSliceElementType(field.TypeStr)))
+		fmt.Fprintf(buf, "\t%s = [len(%s)]%s{}\n", fieldAccess, fieldAccess, getSliceElementType(field.TypeStr))
 
 	case isStringType(field.TypeStr):
-		buf.WriteString(fmt.Sprintf("\t%s = \"\"\n", fieldAccess))
+		fmt.Fprintf(buf, "\t%s = \"\"\n", fieldAccess)
 
 	case isBoolType(field.TypeStr):
-		buf.WriteString(fmt.Sprintf("\t%s = false\n", fieldAccess))
+		fmt.Fprintf(buf, "\t%s = false\n", fieldAccess)
 
 	case isNumericType(field.TypeStr):
-		buf.WriteString(fmt.Sprintf("\t%s = 0\n", fieldAccess))
+		fmt.Fprintf(buf, "\t%s = 0\n", fieldAccess)
 
 	case field.IsStruct:
 		// Проверяем, есть ли метод Reset
 		if field.HasReset {
 			// Пытаемся вызвать Reset через интерфейс
-			buf.WriteString(fmt.Sprintf("\tresetter, ok := %s.(interface{ Reset() })\n", fieldAccess))
+			buf.WriteString("\tresetter, ok := " + fieldAccess + ".(interface{ Reset() })\n")
 			buf.WriteString("\tif ok {\n")
-			buf.WriteString(fmt.Sprintf("\t\tresetter.Reset()\n"))
+			buf.WriteString("\t\tresetter.Reset()\n")
 			buf.WriteString("\t}\n")
 		} else {
 			// Обнуляем структуру
-			buf.WriteString(fmt.Sprintf("\t%s = %s{}\n", fieldAccess, field.TypeStr))
+			fmt.Fprintf(buf, "\t%s = %s{}\n", fieldAccess, field.TypeStr)
 		}
 
 	default:
 		// Для остальных типов обнуляем
-		buf.WriteString(fmt.Sprintf("\t%s = %s{}\n", fieldAccess, field.TypeStr))
+		fmt.Fprintf(buf, "\t%s = %s{}\n", fieldAccess, field.TypeStr)
 	}
 }
 
@@ -465,7 +467,7 @@ func isStructType(t types.Type) bool {
 }
 
 // hasResetMethodForType проверяет наличие метода Reset у типа
-func hasResetMethodForType(typeName string) bool {
+func hasResetMethodForType(_ string) bool {
 	// Для простоты считаем, что метод есть если имя типа указано явно
 	// В реальной реализации нужно смотреть в info.Types и проверять методы
 	return false
@@ -494,12 +496,7 @@ func isNumericType(typeStr string) bool {
 	numericTypes := []string{"int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",
 		"float32", "float64", "complex64", "complex128"}
-	for _, t := range numericTypes {
-		if typeStr == t {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(numericTypes, typeStr)
 }
 
 // getSliceElementType получает тип элемента слайса или массива
