@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,20 @@ import (
 
 	"github.com/idudko/go-musthave-metrics/internal/agent"
 )
+
+var (
+	buildVersion = "N/A"
+	buildDate    = "N/A"
+	buildCommit  = "N/A"
+)
+
+// buildInfo returns value or "N/A" if empty
+func buildInfo(value string) string {
+	if value == "" {
+		return "N/A"
+	}
+	return value
+}
 
 type Config struct {
 	Address        string `env:"ADDRESS"`
@@ -34,6 +49,11 @@ func main() {
 	if err := cleanenv.ReadEnv(&config); err != nil {
 		log.Fatalf("Failed to read config from env: %v", err)
 	}
+
+	// Print build information
+	fmt.Printf("Build version: %s\n", buildInfo(buildVersion))
+	fmt.Printf("Build date: %s\n", buildInfo(buildDate))
+	fmt.Printf("Build commit: %s\n", buildInfo(buildCommit))
 
 	fset := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	fset.StringVar(&config.Address, "a", config.Address, "HTTP address to listen on")

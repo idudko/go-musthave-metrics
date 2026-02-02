@@ -11,6 +11,10 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Generated code
+*.gen.go
+*.gen_test.go
+
 # Binaries
 cmd/agent/main
 cmd/agent/agent

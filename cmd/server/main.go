@@ -20,6 +20,20 @@ import (
 	"github.com/idudko/go-musthave-metrics/internal/service"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
+// buildInfo returns the value or "N/A" if empty
+func buildInfo(value string) string {
+	if value == "" {
+		return "N/A"
+	}
+	return value
+}
+
 type Config struct {
 	Address         string `env:"ADDRESS"`
 	StoreInterval   int    `env:"STORE_INTERVAL"`
@@ -50,14 +64,14 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	if config.DSN != "" {
 		dbStorage, err := repository.NewDBStorage(config.DSN)
 		if err != nil {
-			log.Fatalf("failed to create database storage: %v", err)
+			return nil, nil, fmt.Errorf("failed to create database storage: %v", err)
 		}
 		storage = dbStorage
 		pinger = dbStorage
 	} else {
 		storage, err = repository.NewFileStorage(config.FileStoragePath, config.StoreInterval, config.Restore)
 		if err != nil {
-			log.Fatalf("failed to create file storage: %v", err)
+			return nil, nil, fmt.Errorf("failed to create file storage: %v", err)
 		}
 	}
 
@@ -129,6 +143,11 @@ func main() {
 	if err := cleanenv.ReadEnv(&config); err != nil {
 		log.Fatalf("Failed to read config from env: %v", err)
 	}
+
+	// Print build information
+	fmt.Printf("Build version: %s\n", buildInfo(buildVersion))
+	fmt.Printf("Build date: %s\n", buildInfo(buildDate))
+	fmt.Printf("Build commit: %s\n", buildInfo(buildCommit))
 
 	fset := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	fset.StringVar(&config.Address, "a", config.Address, "HTTP address to listen on")
