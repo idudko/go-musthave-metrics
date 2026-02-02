@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"reflect"
 	"sync"
 )
 
@@ -46,6 +47,7 @@ func (p *Pool[T]) Get() T {
 
 // Put returns an object to the pool.
 // The object's Reset method is called before it is placed in the pool.
+// If x is nil, Reset will not be called.
 //
 // Example:
 //
@@ -53,6 +55,11 @@ func (p *Pool[T]) Get() T {
 //	// use obj...
 //	p.Put(obj)
 func (p *Pool[T]) Put(x T) {
-	x.Reset()
+	// Check if x is nil before calling Reset
+	// reflect.Ptr = 22
+	rv := reflect.ValueOf(x)
+	if rv.Kind() == 22 && !rv.IsNil() {
+		x.Reset()
+	}
 	p.pool.Put(x)
 }

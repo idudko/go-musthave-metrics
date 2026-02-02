@@ -1,3 +1,5 @@
+//go:generate go run ../../cmd/reset/main.go
+
 package resetexample
 
 // generate:reset

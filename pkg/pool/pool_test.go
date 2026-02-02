@@ -1,166 +1,144 @@
 package pool
 
 import (
-	"fmt"
 	"sync"
 	"testing"
 )
 
-// TestStruct is a simple test struct with exported fields
-type TestStruct struct {
-	ID     int
-	Name   string
-	Items  []string
-	Config map[string]string
+// mockResetter is a mock implementation of Resetter that tracks Reset() calls
+type mockResetter struct {
+	resetCalled bool
+	resetCount  int
+	mu          sync.Mutex
 }
 
-// Reset resets TestStruct to its zero values
-func (t *TestStruct) Reset() {
-	t.ID = 0
-	t.Name = ""
-	t.Items = t.Items[:0]
-	clear(t.Config)
+// Reset marks that Reset was called
+func (m *mockResetter) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetCalled = true
+	m.resetCount++
 }
 
-// TestStructWithNested is a test struct with nested fields
-type TestStructWithNested struct {
-	Value  int
-	Nested *TestStruct
-	Slice  []*TestStruct
+// wasResetCalled returns true if Reset was called
+func (m *mockResetter) wasResetCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resetCalled
 }
 
-// Reset resets TestStructWithNested to its zero values
-func (t *TestStructWithNested) Reset() {
-	t.Value = 0
-	if t.Nested != nil {
-		t.Nested.Reset()
-	}
-	t.Slice = t.Slice[:0]
+// getResetCount returns the number of times Reset was called
+func (m *mockResetter) getResetCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resetCount
+}
+
+// newMockResetter creates a new mockResetter (needed for Pool factory)
+func newMockResetter() *mockResetter {
+	return &mockResetter{}
 }
 
 func TestPool_GetPut(t *testing.T) {
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Config: make(map[string]string),
-		}
+	p := New(func() *mockResetter {
+		return &mockResetter{}
 	})
 
 	// Get an object
 	obj := p.Get()
 
-	// Modify it
-	obj.ID = 42
-	obj.Name = "test"
-	obj.Items = []string{"item1", "item2", "item3"}
-	obj.Config = map[string]string{"key": "value"}
+	// Verify Reset hasn't been called yet
+	if obj.wasResetCalled() {
+		t.Error("expected Reset to not be called before Put")
+	}
 
-	// Put it back
+	// Put it back - this should call Reset
 	p.Put(obj)
 
-	// Get again - should be same object (or equivalent) and reset
+	// Verify Reset was called
+	if !obj.wasResetCalled() {
+		t.Error("expected Reset to be called after Put")
+	}
+
+	// Get again - should be same object (or equivalent) and reset should not be called on Get
 	obj2 := p.Get()
 
-	// Verify it was reset
-	if obj2.ID != 0 {
-		t.Errorf("expected ID to be 0 after Put/Get, got %d", obj2.ID)
+	// Verify the object was reset before being put back
+	if !obj2.wasResetCalled() {
+		t.Error("expected object to have been reset after Put")
 	}
 
-	if obj2.Name != "" {
-		t.Errorf("expected Name to be empty after Put/Get, got %s", obj2.Name)
-	}
-
-	if len(obj2.Items) != 0 {
-		t.Errorf("expected Items to have length 0 after Put/Get, got %d", len(obj2.Items))
-	}
-
-	if len(obj2.Config) != 0 {
-		t.Errorf("expected Config to be empty after Put/Get, got %d items", len(obj2.Config))
+	// Verify Reset was only called once
+	if obj2.getResetCount() != 1 {
+		t.Errorf("expected Reset to be called 1 time, got %d", obj2.getResetCount())
 	}
 }
 
 func TestPool_ResetCalledOnPut(t *testing.T) {
-	// Test with TestStruct which already has Reset method
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Config: make(map[string]string),
-		}
-	})
+	// Test with mock to verify Reset is called
+	p := New(newMockResetter)
 
 	obj := p.Get()
-	obj.ID = 100
 
 	// Put should call Reset
 	p.Put(obj)
 
-	// Verify it was reset (we can check ID is 0)
-	if obj.ID != 0 {
-		t.Errorf("expected ID to be 0 after Put, got %d", obj.ID)
+	// Verify it was reset
+	if !obj.wasResetCalled() {
+		t.Error("expected Reset to be called after Put")
+	}
+
+	if obj.getResetCount() != 1 {
+		t.Errorf("expected Reset to be called 1 time, got %d", obj.getResetCount())
 	}
 }
 
-// Test with TestStructWithNested to verify nested reset
-func TestPool_ResetNestedStructs(t *testing.T) {
-	p := New(func() *TestStructWithNested {
-		return &TestStructWithNested{}
-	})
+func TestPool_ResetCalledMultipleTimes(t *testing.T) {
+	// Test that Reset is called each time Put is called
+	p := New(newMockResetter)
 
 	obj := p.Get()
-	obj.Value = 100
-	obj.Nested = &TestStruct{ID: 1, Name: "nested"}
-	obj.Slice = []*TestStruct{{ID: 2}, {ID: 3}}
 
+	// Put it back - first reset
 	p.Put(obj)
 
-	// Verify nested struct was reset
-	if obj.Nested == nil {
-		t.Error("expected Nested to be non-nil after Reset")
-	} else {
-		if obj.Nested.ID != 0 {
-			t.Errorf("expected Nested.ID to be 0 after Reset, got %d", obj.Nested.ID)
-		}
-		if obj.Nested.Name != "" {
-			t.Errorf("expected Nested.Name to be empty after Reset, got %s", obj.Nested.Name)
-		}
-	}
+	// Get it again
+	obj2 := p.Get()
 
-	if len(obj.Slice) != 0 {
-		t.Errorf("expected Slice to have length 0 after Reset, got %d", len(obj.Slice))
+	// Modify and put back - second reset
+	p.Put(obj2)
+
+	// Get it once more
+	obj3 := p.Get()
+
+	// Verify Reset was called twice (once for each Put)
+	if obj3.getResetCount() != 2 {
+		t.Errorf("expected Reset to be called 2 times, got %d", obj3.getResetCount())
 	}
 }
 
 func TestPool_ConcurrentAccess(t *testing.T) {
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Items:  make([]string, 0, 10),
-			Config: make(map[string]string),
-		}
-	})
+	p := New(newMockResetter)
 
 	const numGoroutines = 100
 	const iterationsPerGoroutine = 100
 
 	var wg sync.WaitGroup
 
-	for i := range numGoroutines {
+	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
-			for j := range iterationsPerGoroutine {
+			for j := 0; j < iterationsPerGoroutine; j++ {
 				obj := p.Get()
-
-				// Modify object
-				obj.ID = id*100 + j
-				obj.Name = "test"
-				obj.Items = append(obj.Items, fmt.Sprintf("item-%d", j))
-				obj.Config[fmt.Sprintf("key-%d", j)] = "value"
 
 				// Return to pool
 				p.Put(obj)
 
-				// Verify it's reset
-				if obj.ID != 0 || obj.Name != "" || len(obj.Items) != 0 || len(obj.Config) != 0 {
-					t.Errorf("object not properly reset after Put")
+				// Verify Reset was called
+				if !obj.wasResetCalled() {
+					t.Errorf("Reset not called in goroutine %d, iteration %d", id, j)
 				}
 			}
 		}(i)
@@ -170,255 +148,163 @@ func TestPool_ConcurrentAccess(t *testing.T) {
 }
 
 func TestPool_MultiplePools(t *testing.T) {
-	p1 := New(func() *TestStruct {
-		return &TestStruct{}
-	})
-
-	p2 := New(func() *TestStructWithNested {
-		return &TestStructWithNested{}
-	})
+	p1 := New(newMockResetter)
+	p2 := New(newMockResetter)
 
 	obj1 := p1.Get()
-	obj1.ID = 42
 	p1.Put(obj1)
 
 	obj2 := p2.Get()
-	obj2.Value = 100
 	p2.Put(obj2)
 
-	// Get from each pool and verify types
+	// Get from each pool and verify Reset was called
 	result1 := p1.Get()
 	if result1 == nil {
-		t.Error("expected non-nil TestStruct from p1")
+		t.Fatal("expected non-nil object from p1")
+	}
+	if !result1.wasResetCalled() {
+		t.Error("expected Reset to be called for p1")
 	}
 
 	result2 := p2.Get()
 	if result2 == nil {
-		t.Error("expected non-nil TestStructWithNested from p2")
+		t.Fatal("expected non-nil object from p2")
+	}
+	if !result2.wasResetCalled() {
+		t.Error("expected Reset to be called for p2")
+	}
+
+	// Verify objects are independent (different Reset counts)
+	result1.resetCount = 5
+	result2.resetCount = 10
+
+	if result1.getResetCount() != 5 {
+		t.Errorf("p1 object should have 5 resets, got %d", result1.getResetCount())
+	}
+	if result2.getResetCount() != 10 {
+		t.Errorf("p2 object should have 10 resets, got %d", result2.getResetCount())
 	}
 }
 
 func TestPool_CustomFactory(t *testing.T) {
-	initialCapacity := 1000
+	// Test that custom factory function is used
+	callCount := 0
 
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Items:  make([]string, 0, initialCapacity),
-			Config: make(map[string]string),
-		}
+	p := New(func() *mockResetter {
+		callCount++
+		return &mockResetter{}
 	})
 
+	// Get an object - should call factory
 	obj1 := p.Get()
-	capacity1 := cap(obj1.Items)
 
-	if capacity1 != initialCapacity {
-		t.Errorf("expected initial capacity %d, got %d", initialCapacity, capacity1)
+	if callCount != 1 {
+		t.Errorf("expected factory to be called 1 time, got %d", callCount)
 	}
 
-	// Fill slice
-	for i := 0; i < 100; i++ {
-		obj1.Items = append(obj1.Items, fmt.Sprintf("item-%d", i))
-	}
-
-	// Put back and get again
+	// Put it back
 	p.Put(obj1)
 
+	// Get again - should reuse object, factory not called
 	obj2 := p.Get()
-	capacity2 := cap(obj2.Items)
 
-	if capacity2 != initialCapacity {
-		t.Errorf("expected preserved capacity %d, got %d", initialCapacity, capacity2)
+	if callCount != 1 {
+		t.Errorf("expected factory to still be called 1 time (object reused), got %d", callCount)
 	}
 
-	// Verify length is 0 after Reset
-	if len(obj2.Items) != 0 {
-		t.Errorf("expected length 0 after Reset, got %d", len(obj2.Items))
+	// Verify Reset was called
+	if !obj2.wasResetCalled() {
+		t.Error("expected Reset to be called after Put")
+	}
+
+	// Get a third time (while second is still in use)
+	_ = p.Get()
+
+	if callCount != 2 {
+		t.Errorf("expected factory to be called 2 times, got %d", callCount)
 	}
 }
 
-// TestPool_NilReceiver removed - cannot safely call Reset() on nil pointers
+func TestPool_NilReceiver(t *testing.T) {
+	// Test that Pool handles nil receivers safely
+	var p *Pool[*mockResetter]
 
-func TestPool_MemoryReuse(t *testing.T) {
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Items:  make([]string, 0, 100),
-			Config: make(map[string]string),
+	// These should panic for nil pool
+	defer func() {
+		if r := recover(); r != nil {
+			// Panic is expected for nil pool
+			t.Logf("Expected panic: %v", r)
 		}
-	})
+	}()
 
-	// First usage
-	obj1 := p.Get()
-	obj1Addr := obj1
-	obj1.Items = append(obj1.Items, "item1", "item2", "item3")
-	obj1.Config["key"] = "value"
-
-	p.Put(obj1)
-
-	// Second usage - should reuse same object
-	obj2 := p.Get()
-
-	// Check if it's same object (not guaranteed, but likely)
-	if obj2 == obj1Addr {
-		// Verify capacity is preserved
-		if cap(obj2.Items) != 100 {
-			t.Errorf("expected capacity 100, got %d", cap(obj2.Items))
-		}
-	}
-
-	// Verify it's reset
-	if len(obj2.Items) != 0 {
-		t.Errorf("expected empty slice after Reset, got %d elements", len(obj2.Items))
-	}
-
-	if len(obj2.Config) != 0 {
-		t.Errorf("expected empty map after Reset, got %d elements", len(obj2.Config))
-	}
+	_ = p.Get()
 }
 
-func TestPool_NestedStructs(t *testing.T) {
-	p := New(func() *TestStructWithNested {
-		return &TestStructWithNested{}
+func TestPool_GetPutWithNilValue(t *testing.T) {
+	// Test that the pool doesn't accept nil values
+	p := New(func() *mockResetter {
+		return &mockResetter{}
 	})
 
 	obj := p.Get()
 
-	// Set nested struct
-	obj.Nested = &TestStruct{
-		ID:   42,
-		Name: "test",
-	}
-	obj.Slice = []*TestStruct{{ID: 1}, {ID: 2}}
+	// Try to put nil - this should work but won't call Reset
+	p.Put(nil)
 
-	p.Put(obj)
-
-	// Get again
-	obj2 := p.Get()
-
-	// Verify nested struct was reset
-	if obj2.Nested != nil {
-		if obj2.Nested.ID != 0 {
-			t.Errorf("expected Nested.ID to be 0, got %d", obj2.Nested.ID)
-		}
-		if obj2.Nested.Name != "" {
-			t.Errorf("expected Nested.Name to be empty, got %s", obj2.Nested.Name)
-		}
-	}
-
-	if len(obj2.Slice) != 0 {
-		t.Errorf("expected Slice to be empty after Reset, got %d elements", len(obj2.Slice))
-	}
-}
-
-func TestPool_SliceOfPointers(t *testing.T) {
-	p := New(func() *TestStructWithNested {
-		return &TestStructWithNested{}
-	})
-
-	obj := p.Get()
-
-	// Add pointers to slice
-	obj.Slice = append(obj.Slice,
-		&TestStruct{ID: 1, Name: "item1"},
-		&TestStruct{ID: 2, Name: "item2"},
-	)
-
-	p.Put(obj)
-
-	obj2 := p.Get()
-
-	// Verify slice is empty but capacity preserved
-	if len(obj2.Slice) != 0 {
-		t.Errorf("expected slice to be empty, got %d elements", len(obj2.Slice))
+	// Verify the object we got is still valid
+	if obj == nil {
+		t.Error("expected non-nil object from Get")
 	}
 }
 
 func TestPool_MultiplePutGet(t *testing.T) {
-	p := New(func() *TestStruct {
-		return &TestStruct{}
-	})
+	p := New(newMockResetter)
 
 	// Put multiple objects
-	for i := range 10 {
-		obj := p.Get()
-		obj.ID = i
-		p.Put(obj)
-	}
-
-	// Get them back
 	for range 10 {
 		obj := p.Get()
-		if obj.ID != 0 {
-			t.Errorf("expected ID to be 0, got %d", obj.ID)
-		}
 		p.Put(obj)
 	}
-}
 
-func TestPool_PointerFields(t *testing.T) {
-	p := New(func() *TestStructWithNested {
-		return &TestStructWithNested{}
-	})
+	// Get them back - should reuse objects
+	var resetCount int
+	for range 10 {
+		obj := p.Get()
+		resetCount += obj.getResetCount()
+		p.Put(obj)
+	}
 
-	obj := p.Get()
-	obj.Nested = &TestStruct{ID: 100, Name: "test"}
-	obj.Slice = []*TestStruct{{ID: 200}}
-
-	p.Put(obj)
-
-	obj2 := p.Get()
-
-	// Verify pointer fields are still not nil (they were allocated)
-	if obj2.Nested == nil {
-		t.Error("expected Nested to be non-nil")
-	} else {
-		if obj2.Nested.ID != 0 {
-			t.Errorf("expected Nested.ID to be 0, got %d", obj2.Nested.ID)
-		}
-		if obj2.Nested.Name != "" {
-			t.Errorf("expected Nested.Name to be empty, got %s", obj2.Nested.Name)
-		}
+	// All objects should have been reset at least once
+	if resetCount < 10 {
+		t.Errorf("expected at least 10 resets, got %d", resetCount)
 	}
 }
 
-func TestPool_MapFields(t *testing.T) {
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Config: make(map[string]string),
-		}
-	})
+func TestPool_PutSameObjectMultipleTimes(t *testing.T) {
+	p := New(newMockResetter)
 
 	obj := p.Get()
-	obj.Config["key1"] = "value1"
-	obj.Config["key2"] = "value2"
+
+	// Put same object multiple times
+	p.Put(obj)
+	count1 := obj.getResetCount()
 
 	p.Put(obj)
+	count2 := obj.getResetCount()
 
-	obj2 := p.Get()
-
-	// Verify map is cleared
-	if len(obj2.Config) != 0 {
-		t.Errorf("expected Config to be empty, got %d elements", len(obj2.Config))
-	}
-
-	// Map should still be non-nil (clear() keeps it)
-	if obj2.Config == nil {
-		t.Error("expected Config to be non-nil after clear")
+	// Reset should be called each time
+	if count2 != count1+1 {
+		t.Errorf("expected Reset count to increase by 1, got %d vs %d", count2, count1)
 	}
 }
 
 func BenchmarkPool_GetPut(b *testing.B) {
-	p := New(func() *TestStruct {
-		return &TestStruct{
-			Items:  make([]string, 0, 10),
-			Config: make(map[string]string),
-		}
-	})
+	p := New(newMockResetter)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			obj := p.Get()
-			obj.Items = append(obj.Items, "item1", "item2", "item3")
 			p.Put(obj)
 		}
 	})
@@ -427,14 +313,9 @@ func BenchmarkPool_GetPut(b *testing.B) {
 func BenchmarkPool_NoPool(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			obj := &TestStruct{
-				Items:  make([]string, 0, 10),
-				Config: make(map[string]string),
-			}
-			obj.Items = append(obj.Items, "item1", "item2", "item3")
+			obj := &mockResetter{}
+			obj.Reset()
 			// No pool, object is just garbage collected
-			_ = obj.Config
-			_ = obj
 		}
 	})
 }

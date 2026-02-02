@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"text/template"
 )
 
 // StructInfo хранит информацию о структуре для генерации
@@ -28,6 +29,7 @@ type FieldInfo struct {
 	Name      string
 	TypeExpr  ast.Expr
 	TypeStr   string
+	BaseType  string
 	IsPointer bool
 	IsSlice   bool
 	IsMap     bool
@@ -249,6 +251,7 @@ func collectFieldInfo(fieldList []*ast.Field, info *types.Info) []*FieldInfo {
 				Name:     name.Name,
 				TypeExpr: field.Type,
 				TypeStr:  fieldType,
+				BaseType: getBaseType(fieldType),
 			}
 
 			// Определяем характеристики типа
@@ -296,95 +299,60 @@ func generateResetCode(pkgName string, structs []*StructInfo) string {
 	return string(formatted)
 }
 
-// generateResetMethod генерирует метод Reset для структуры
-func generateResetMethod(buf *bytes.Buffer, st *StructInfo) {
-	buf.WriteString(fmt.Sprintf("// Reset resets the %s fields to their zero values\n", st.Name))
-	buf.WriteString(fmt.Sprintf("func (x *%s) Reset() {\n", st.Name))
-	buf.WriteString("\tif x == nil {\n")
-	buf.WriteString("\t\treturn\n")
-	buf.WriteString("\t}\n")
-
-	for _, field := range st.Fields {
-		generateFieldReset(buf, field, "x")
-	}
-
-	buf.WriteString("}\n\n")
+// TemplateFuncs - функции для использования в шаблонах
+var TemplateFuncs = template.FuncMap{
+	"isStringType":        isStringType,
+	"isBoolType":          isBoolType,
+	"isNumericType":       isNumericType,
+	"getBaseType":         getBaseType,
+	"getSliceElementType": getSliceElementType,
 }
 
-// generateFieldReset генерирует код сброса для поля
-func generateFieldReset(buf *bytes.Buffer, field *FieldInfo, receiver string) {
-	if field.Name == "" {
+// resetTemplate - шаблон для генерации метода Reset
+var resetTemplate = template.Must(template.New("reset").Funcs(TemplateFuncs).Parse(`// Reset resets the {{.Name}} fields to their zero values
+func (x *{{.Name}}) Reset() {
+	if x == nil {
 		return
 	}
-
-	fieldAccess := fmt.Sprintf("%s.%s", receiver, field.Name)
-
-	// Проверяем тип поля и генерируем соответствующий код
-	switch {
-	case field.IsPointer:
-		fmt.Fprintf(buf, "\tif %s != nil {\n", fieldAccess)
-
-		// Получаем базовый тип указателя
-		baseType := getBaseType(field.TypeStr)
-
-		switch {
-		case isStringType(baseType):
-			fmt.Fprintf(buf, "\t\t*%s = \"\"\n", fieldAccess)
-		case isBoolType(baseType):
-			fmt.Fprintf(buf, "\t\t*%s = false\n", fieldAccess)
-		case isNumericType(baseType):
-			fmt.Fprintf(buf, "\t\t*%s = 0\n", fieldAccess)
-		case field.HasReset:
-			fmt.Fprintf(buf, "\t\t%s.Reset()\n", fieldAccess)
-		default:
-			// Для структур без Reset обнуляем
-			fmt.Fprintf(buf, "\t\t*%s = %s{}\n", fieldAccess, baseType)
-		}
-
-		buf.WriteString("\t}\n")
-
-	case field.IsSlice:
-		// Обрезаем слайс (с проверкой на nil)
-		fmt.Fprintf(buf, "\tif %s != nil {\n", fieldAccess)
-		fmt.Fprintf(buf, "\t\t%s = %s[:0]\n", fieldAccess, fieldAccess)
-		buf.WriteString("\t}\n")
-
-	case field.IsMap:
-		// Очищаем карту (с проверкой на nil)
-		fmt.Fprintf(buf, "\tif %s != nil {\n", fieldAccess)
-		fmt.Fprintf(buf, "\t\tclear(%s)\n", fieldAccess)
-		buf.WriteString("\t}\n")
-
-	case field.IsArray:
-		// Обнуляем массив
-		fmt.Fprintf(buf, "\t%s = [len(%s)]%s{}\n", fieldAccess, fieldAccess, getSliceElementType(field.TypeStr))
-
-	case isStringType(field.TypeStr):
-		fmt.Fprintf(buf, "\t%s = \"\"\n", fieldAccess)
-
-	case isBoolType(field.TypeStr):
-		fmt.Fprintf(buf, "\t%s = false\n", fieldAccess)
-
-	case isNumericType(field.TypeStr):
-		fmt.Fprintf(buf, "\t%s = 0\n", fieldAccess)
-
-	case field.IsStruct:
-		// Проверяем, есть ли метод Reset
-		if field.HasReset {
-			// Пытаемся вызвать Reset через интерфейс
-			buf.WriteString("\tresetter, ok := " + fieldAccess + ".(interface{ Reset() })\n")
-			buf.WriteString("\tif ok {\n")
-			buf.WriteString("\t\tresetter.Reset()\n")
-			buf.WriteString("\t}\n")
-		} else {
-			// Обнуляем структуру
-			fmt.Fprintf(buf, "\t%s = %s{}\n", fieldAccess, field.TypeStr)
-		}
-
-	default:
-		// Для остальных типов обнуляем
-		fmt.Fprintf(buf, "\t%s = %s{}\n", fieldAccess, field.TypeStr)
+{{- range .Fields}}
+{{- if .Name}}
+	{{if .IsPointer}}if x.{{.Name}} != nil {
+		{{- if isStringType .BaseType}}*x.{{.Name}} = ""
+		{{- else if isBoolType .BaseType}}*x.{{.Name}} = false
+		{{- else if isNumericType .BaseType}}*x.{{.Name}} = 0
+		{{- else if .HasReset}}x.{{.Name}}.Reset()
+		{{- else}}*x.{{.Name}} = {{.BaseType}}{}
+		{{- end}}
 	}
+	{{- else if .IsSlice}}if x.{{.Name}} != nil {
+		x.{{.Name}} = x.{{.Name}}[:0]
+	}
+	{{- else if .IsMap}}if x.{{.Name}} != nil {
+		clear(x.{{.Name}})
+	}
+	{{- else if .IsArray}}x.{{.Name}} = [len(x.{{.Name}})]{{getSliceElementType .TypeStr}}{}
+	{{- else if isStringType .TypeStr}}x.{{.Name}} = ""
+	{{- else if isBoolType .TypeStr}}x.{{.Name}} = false
+	{{- else if isNumericType .TypeStr}}x.{{.Name}} = 0
+	{{- else if .IsStruct}}{{if .HasReset}}	resetter, ok := x.{{.Name}}.(interface{ Reset() })
+	if ok {
+		resetter.Reset()
+	}
+	{{- else}}x.{{.Name}} = {{.TypeStr}}{}
+	{{- end}}
+	{{- else}}x.{{.Name}} = {{.TypeStr}}{}
+	{{- end}}
+{{- end}}
+{{- end}}
+}
+`))
+
+// generateResetMethod генерирует метод Reset для структуры
+func generateResetMethod(buf *bytes.Buffer, st *StructInfo) {
+	if err := resetTemplate.Execute(buf, st); err != nil {
+		fmt.Fprintf(os.Stderr, "Error executing template for %s: %v\n", st.Name, err)
+	}
+	buf.WriteString("\n")
 }
 
 // hasResetComment проверяет наличие комментария // generate:reset
