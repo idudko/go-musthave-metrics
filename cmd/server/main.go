@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	pprofhttp "net/http/pprof"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -152,5 +157,60 @@ func main() {
 		fmt.Printf("Config file: %s\n", ConfigFile())
 	}
 
-	log.Fatal(http.ListenAndServe(config.Address, r))
+	// Create HTTP server
+	srv := &http.Server{
+		Addr:    config.Address,
+		Handler: r,
+	}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Setup signal notification for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	// Wait for shutdown signal
+	sig := <-sigChan
+	log.Printf("Received signal %v, initiating graceful shutdown...", sig)
+
+	// Create shutdown context with timeout
+	shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownRelease()
+
+	// Gracefully shutdown HTTP server
+	log.Println("Shutting down HTTP server...")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	} else {
+		log.Println("HTTP server stopped gracefully")
+	}
+
+	// Save metrics before shutdown (for file storage)
+	if fileStorage, ok := storage.(interface {
+		Save(ctx context.Context) error
+	}); ok {
+		log.Println("Saving metrics to file...")
+		if err := fileStorage.Save(context.Background()); err != nil {
+			log.Printf("Error saving metrics: %v", err)
+		} else {
+			log.Println("Metrics saved successfully")
+		}
+	}
+
+	// Close storage connection
+	if closer, ok := storage.(io.Closer); ok {
+		log.Println("Closing storage...")
+		if err := closer.Close(); err != nil {
+			log.Printf("Error closing storage: %v", err)
+		} else {
+			log.Println("Storage closed successfully")
+		}
+	}
+
+	log.Println("Server shutdown complete")
 }

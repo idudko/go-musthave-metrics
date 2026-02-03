@@ -41,9 +41,13 @@ func main() {
 	metricsService.Start(config.PollInterval, config.ReportInterval)
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	<-sigChan
 
-	metricsService.Stop()
+	log.Println("Received shutdown signal, gracefully stopping...")
+
+	// Stop collection and send all pending metrics
+	metricsService.Shutdown()
+
 	log.Println("Agent gracefully stopped")
 }
