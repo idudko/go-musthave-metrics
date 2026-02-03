@@ -1,17 +1,14 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	pprofhttp "net/http/pprof"
-	"os"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/ilyakaznacheev/cleanenv"
 
 	"github.com/idudko/go-musthave-metrics/internal/audit"
 	"github.com/idudko/go-musthave-metrics/internal/handler"
@@ -26,36 +23,11 @@ var (
 	buildCommit  string
 )
 
-// buildInfo returns the value or "N/A" if empty
 func buildInfo(value string) string {
 	if value == "" {
 		return "N/A"
 	}
 	return value
-}
-
-type Config struct {
-	Address         string `env:"ADDRESS"`
-	StoreInterval   int    `env:"STORE_INTERVAL"`
-	FileStoragePath string `env:"FILE_STORAGE_PATH"`
-	Restore         bool   `env:"RESTORE"`
-	DSN             string `env:"DATABASE_DSN"`
-	Key             string `env:"KEY"`
-	AuditFile       string `env:"AUDIT_FILE"`
-	AuditURL        string `env:"AUDIT_URL"`
-	CryptoKey       string `env:"CRYPTO_KEY"`
-}
-
-var config = Config{
-	Address:         "localhost:8080",
-	StoreInterval:   300,
-	FileStoragePath: "",
-	Restore:         false,
-	DSN:             "",
-	Key:             "",
-	AuditFile:       "",
-	AuditURL:        "",
-	CryptoKey:       "",
 }
 
 func newServer(config Config) (*chi.Mux, repository.Storage, error) {
@@ -115,7 +87,6 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
 
-	// Add pprof endpoints for profiling
 	pprofRouter := chi.NewRouter()
 	pprofRouter.Get("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/debug/pprof/heap", http.StatusTemporaryRedirect)
@@ -143,27 +114,13 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 }
 
 func main() {
-	if err := cleanenv.ReadEnv(&config); err != nil {
-		log.Fatalf("Failed to read config from env: %v", err)
+	if err := Init(); err != nil {
+		log.Fatalf("Failed to initialize config: %v", err)
 	}
 
-	// Print build information
 	fmt.Printf("Build version: %s\n", buildInfo(buildVersion))
 	fmt.Printf("Build date: %s\n", buildInfo(buildDate))
 	fmt.Printf("Build commit: %s\n", buildInfo(buildCommit))
-
-	fset := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	fset.StringVar(&config.Address, "a", config.Address, "HTTP address to listen on")
-	fset.IntVar(&config.StoreInterval, "i", config.StoreInterval, "Store interval in seconds (0 = synchronous)")
-	fset.StringVar(&config.FileStoragePath, "f", config.FileStoragePath, "Path to file storage")
-	fset.BoolVar(&config.Restore, "r", config.Restore, "Restore metrics from file")
-	fset.StringVar(&config.DSN, "d", config.DSN, "PostgreSQL DSN")
-	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
-	fset.StringVar(&config.AuditFile, "audit-file", config.AuditFile, "Path to audit log file")
-	fset.StringVar(&config.AuditURL, "audit-url", config.AuditURL, "URL for audit server")
-	fset.StringVar(&config.CryptoKey, "crypto-key", config.CryptoKey, "Path to private key file for decryption")
-	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
-	fset.Parse(os.Args[1:])
 
 	r, storage, err := newServer(config)
 	if err != nil {
@@ -189,6 +146,10 @@ func main() {
 
 	if config.CryptoKey != "" {
 		fmt.Printf("Crypto key: %s\n", config.CryptoKey)
+	}
+
+	if ConfigFile() != "" {
+		fmt.Printf("Config file: %s\n", ConfigFile())
 	}
 
 	log.Fatal(http.ListenAndServe(config.Address, r))
