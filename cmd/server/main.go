@@ -43,6 +43,7 @@ type Config struct {
 	Key             string `env:"KEY"`
 	AuditFile       string `env:"AUDIT_FILE"`
 	AuditURL        string `env:"AUDIT_URL"`
+	CryptoKey       string `env:"CRYPTO_KEY"`
 }
 
 var config = Config{
@@ -54,6 +55,7 @@ var config = Config{
 	Key:             "",
 	AuditFile:       "",
 	AuditURL:        "",
+	CryptoKey:       "",
 }
 
 func newServer(config Config) (*chi.Mux, repository.Storage, error) {
@@ -97,6 +99,7 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.DecryptionMiddleware(config.CryptoKey))
 	r.Use(middleware.HashValidationMiddleware(config.Key))
 	r.Use(middleware.GzipRequestMiddleware)
 	r.Use(chimiddleware.Compress(5, "application/json", "text/html"))
@@ -158,6 +161,7 @@ func main() {
 	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
 	fset.StringVar(&config.AuditFile, "audit-file", config.AuditFile, "Path to audit log file")
 	fset.StringVar(&config.AuditURL, "audit-url", config.AuditURL, "URL for audit server")
+	fset.StringVar(&config.CryptoKey, "crypto-key", config.CryptoKey, "Path to private key file for decryption")
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
@@ -181,6 +185,10 @@ func main() {
 
 	if config.AuditURL != "" {
 		fmt.Printf("Audit URL: %s\n", config.AuditURL)
+	}
+
+	if config.CryptoKey != "" {
+		fmt.Printf("Crypto key: %s\n", config.CryptoKey)
 	}
 
 	log.Fatal(http.ListenAndServe(config.Address, r))

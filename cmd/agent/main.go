@@ -34,6 +34,7 @@ type Config struct {
 	UseBatch       bool   `env:"BATCH"`
 	Key            string `env:"KEY"`
 	RateLimit      int    `env:"RATE_LIMIT"`
+	CryptoKey      string `env:"CRYPTO_KEY"`
 }
 
 var config = Config{
@@ -43,6 +44,7 @@ var config = Config{
 	UseBatch:       true,
 	Key:            "",
 	RateLimit:      1,
+	CryptoKey:      "",
 }
 
 func main() {
@@ -62,6 +64,7 @@ func main() {
 	fset.BoolVar(&config.UseBatch, "b", config.UseBatch, "Use batch reporting")
 	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
 	fset.IntVar(&config.RateLimit, "l", config.RateLimit, "Rate limit for concurrent requests")
+	fset.StringVar(&config.CryptoKey, "crypto-key", config.CryptoKey, "Path to public key file for encryption")
 	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
 	fset.Parse(os.Args[1:])
 
@@ -69,7 +72,7 @@ func main() {
 		config.RateLimit = 1
 	}
 
-	metricsService := agent.NewMetricsService(config.Address, config.Key, config.UseBatch, config.RateLimit)
+	metricsService := agent.NewMetricsService(config.Address, config.Key, config.UseBatch, config.RateLimit, config.CryptoKey)
 	metricsService.Start(config.PollInterval, config.ReportInterval)
 
 	sigChan := make(chan os.Signal, 1)

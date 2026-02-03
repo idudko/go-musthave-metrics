@@ -14,6 +14,7 @@ type MetricsService struct {
 	serverAddress string
 	useBatch      bool
 	rateLimit     int
+	cryptoKey     string
 
 	metricsChan chan []byte
 	ctx         context.Context
@@ -23,15 +24,16 @@ type MetricsService struct {
 	workerPool *WorkerPool
 }
 
-func NewMetricsService(serverAddress, key string, useBatch bool, rateLimit int) *MetricsService {
+func NewMetricsService(serverAddress, key string, useBatch bool, rateLimit int, cryptoKey string) *MetricsService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &MetricsService{
 		collector:     NewCollector(key),
-		sender:        NewSender(key),
+		sender:        NewSender(key, cryptoKey),
 		serverAddress: serverAddress,
 		useBatch:      useBatch,
 		rateLimit:     rateLimit,
+		cryptoKey:     cryptoKey,
 		metricsChan:   make(chan []byte, 100),
 		ctx:           ctx,
 		cancel:        cancel,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,16 +13,31 @@ import (
 	"github.com/goccy/go-json"
 
 	"github.com/idudko/go-musthave-metrics/internal/model"
+	"github.com/idudko/go-musthave-metrics/pkg/crypto"
 	"github.com/idudko/go-musthave-metrics/pkg/hash"
+	"github.com/rs/zerolog/log"
 )
 
 type Sender struct {
-	key string
+	key       string
+	cryptoKey *rsa.PublicKey
 }
 
-func NewSender(key string) *Sender {
+func NewSender(key string, cryptoKeyPath string) *Sender {
+	var cryptoKey *rsa.PublicKey
+	if cryptoKeyPath != "" {
+		pubKey, err := crypto.LoadPublicKey(cryptoKeyPath)
+		if err != nil {
+			// Log error but continue - encryption will be disabled
+			log.Printf("Failed to load public key: %v. Encryption will be disabled.", err)
+		} else {
+			cryptoKey = pubKey
+		}
+	}
+
 	return &Sender{
-		key: key,
+		key:       key,
+		cryptoKey: cryptoKey,
 	}
 }
 
@@ -56,24 +72,40 @@ func (s *Sender) doSendMetricJSON(ctx context.Context, url string, m *model.Metr
 	}
 
 	var b bytes.Buffer
-	gw := gzip.NewWriter(&b)
-	if _, err := gw.Write(data); err != nil {
-		return err
-	}
-	if err := gw.Close(); err != nil {
-		return err
+	var requestBody []byte
+	var contentEncoding string
+
+	if s.cryptoKey != nil {
+		// Encrypt with RSA public key
+		encryptedData, err := crypto.Encrypt(data, s.cryptoKey)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt data: %w", err)
+		}
+		requestBody = encryptedData
+		b.Write(encryptedData)
+		contentEncoding = "encrypt"
+	} else {
+		// Compress with gzip
+		gw := gzip.NewWriter(&b)
+		if _, err := gw.Write(data); err != nil {
+			return err
+		}
+		if err := gw.Close(); err != nil {
+			return err
+		}
+		requestBody = b.Bytes()
+		contentEncoding = "gzip"
 	}
 
-	compressed := b.Bytes()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Encoding", contentEncoding)
 
-	if s.key != "" {
-		hashValue := hash.ComputeHash(compressed, s.key)
+	if s.key != "" && s.cryptoKey == nil {
+		hashValue := hash.ComputeHash(requestBody, s.key)
 		req.Header.Set("HashSHA256", hashValue)
 	}
 
@@ -125,24 +157,41 @@ func (s *Sender) doSendMetricsBatch(ctx context.Context, url string, metrics []*
 	}
 
 	var b bytes.Buffer
-	gw := gzip.NewWriter(&b)
-	if _, err := gw.Write(data); err != nil {
-		return fmt.Errorf("failed to write data to gzip writer: %w", err)
+	var requestBody []byte
+	var contentEncoding string
+
+	if s.cryptoKey != nil {
+		// Encrypt with RSA public key
+		encryptedData, err := crypto.Encrypt(data, s.cryptoKey)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt data: %w", err)
+		}
+		requestBody = encryptedData
+		b.Write(encryptedData)
+		contentEncoding = "encrypt"
+	} else {
+		// Compress with gzip
+		gw := gzip.NewWriter(&b)
+		if _, err := gw.Write(data); err != nil {
+			return fmt.Errorf("failed to write data to gzip writer: %w", err)
+		}
+		if err := gw.Close(); err != nil {
+			return fmt.Errorf("failed to close gzip writer: %w", err)
+		}
+		requestBody = b.Bytes()
+		contentEncoding = "gzip"
 	}
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-	compressed := b.Bytes()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
 	if err != nil {
 		return err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Encoding", contentEncoding)
 
-	if s.key != "" {
-		hashValue := hash.ComputeHash(compressed, s.key)
+	if s.key != "" && s.cryptoKey == nil {
+		hashValue := hash.ComputeHash(requestBody, s.key)
 		req.Header.Set("HashSHA256", hashValue)
 	}
 
