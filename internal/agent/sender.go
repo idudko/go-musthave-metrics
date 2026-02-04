@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -71,6 +72,12 @@ func (s *Sender) doSendMetricJSON(ctx context.Context, url string, m *model.Metr
 		return err
 	}
 
+	// Get local IP address
+	localIP, err := getLocalIP()
+	if err != nil {
+		return fmt.Errorf("failed to get local IP: %w", err)
+	}
+
 	var b bytes.Buffer
 	var requestBody []byte
 	var contentEncoding string
@@ -103,6 +110,7 @@ func (s *Sender) doSendMetricJSON(ctx context.Context, url string, m *model.Metr
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", contentEncoding)
+	req.Header.Set("X-Real-IP", localIP)
 
 	if s.key != "" && s.cryptoKey == nil {
 		hashValue := hash.ComputeHash(requestBody, s.key)
@@ -156,6 +164,12 @@ func (s *Sender) doSendMetricsBatch(ctx context.Context, url string, metrics []*
 		return fmt.Errorf("failed to marshal metrics: %w", err)
 	}
 
+	// Get local IP address
+	localIP, err := getLocalIP()
+	if err != nil {
+		return fmt.Errorf("failed to get local IP: %w", err)
+	}
+
 	var b bytes.Buffer
 	var requestBody []byte
 	var contentEncoding string
@@ -189,6 +203,7 @@ func (s *Sender) doSendMetricsBatch(ctx context.Context, url string, metrics []*
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", contentEncoding)
+	req.Header.Set("X-Real-IP", localIP)
 
 	if s.key != "" && s.cryptoKey == nil {
 		hashValue := hash.ComputeHash(requestBody, s.key)
@@ -206,4 +221,25 @@ func (s *Sender) doSendMetricsBatch(ctx context.Context, url string, metrics []*
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// getLocalIP возвращает локальный IP адрес хоста
+func getLocalIP() (string, error) {
+	// Получаем все сетевые интерфейсы
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", fmt.Errorf("failed to get interface addresses: %w", err)
+	}
+
+	for _, addr := range addrs {
+		// Пропускаем локальный loopback интерфейс
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			// Предпочитаем IPv4 адреса
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no valid local IP address found")
 }

@@ -76,6 +76,7 @@ func newServer(config *Config) (*chi.Mux, repository.Storage, error) {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.TrustedSubnetMiddleware(config.TrustedSubnet))
 	r.Use(middleware.DecryptionMiddleware(config.CryptoKey))
 	r.Use(middleware.HashValidationMiddleware(config.Key))
 	r.Use(middleware.GzipRequestMiddleware)
@@ -156,6 +157,10 @@ func main() {
 
 	if cfg.ConfigFile != "" {
 		fmt.Printf("Config file: %s\n", cfg.ConfigFile)
+	}
+
+	if cfg.TrustedSubnet != "" {
+		fmt.Printf("Trusted subnet: %s\n", cfg.TrustedSubnet)
 	}
 
 	// Create HTTP server

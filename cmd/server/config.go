@@ -18,6 +18,7 @@ type JSONConfig struct {
 	CryptoKey     string `json:"crypto_key"`
 	AuditFile     string `json:"audit_file"`
 	AuditURL      string `json:"audit_url"`
+	TrustedSubnet string `json:"trusted_subnet"`
 }
 
 // Config represents the full configuration
@@ -31,6 +32,7 @@ type Config struct {
 	AuditFile       string `env:"AUDIT_FILE"`
 	AuditURL        string `env:"AUDIT_URL"`
 	CryptoKey       string `env:"CRYPTO_KEY"`
+	TrustedSubnet   string `env:"TRUSTED_SUBNET"`
 
 	// ConfigFile is the path to the configuration file if specified
 	ConfigFile string
@@ -55,6 +57,7 @@ func NewConfig() (*Config, error) {
 		AuditFile:       "",
 		AuditURL:        "",
 		CryptoKey:       "",
+		TrustedSubnet:   "",
 	}
 
 	// Register flags with default values
@@ -67,6 +70,7 @@ func NewConfig() (*Config, error) {
 	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Path to audit log file")
 	flag.StringVar(&cfg.AuditURL, "audit-url", "", "URL for audit server")
 	flag.StringVar(&cfg.CryptoKey, "crypto-key", "", "Path to private key file for decryption")
+	flag.StringVar(&cfg.TrustedSubnet, "t", "", "Trusted subnet in CIDR notation (e.g., 192.168.1.0/24)")
 
 	var configFileFlag string
 	flag.StringVar(&configFileFlag, "c", "", "Path to config file")
@@ -104,5 +108,6 @@ func (c *Config) applyJSONConfig(cfg *JSONConfig) {
 	configpkg.ApplyStringIfDefault(&c.AuditFile, "", cfg.AuditFile)
 	configpkg.ApplyStringIfDefault(&c.AuditURL, "", cfg.AuditURL)
 	configpkg.ApplyStringIfDefault(&c.CryptoKey, "", cfg.CryptoKey)
+	configpkg.ApplyStringIfDefault(&c.TrustedSubnet, "", cfg.TrustedSubnet)
 	configpkg.ApplyBoolIfDefault(&c.Restore, cfg.Restore)
 }
