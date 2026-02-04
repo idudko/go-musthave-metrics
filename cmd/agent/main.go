@@ -38,7 +38,7 @@ func main() {
 		log.Printf("Config file: %s", cfg.ConfigFile)
 	}
 
-	metricsService := agent.NewMetricsService(cfg.Address, cfg.Key, cfg.UseBatch, cfg.RateLimit, cfg.CryptoKey)
+	metricsService := agent.NewMetricsService(cfg.Address, cfg.GrpcAddress, cfg.Key, cfg.UseBatch, cfg.RateLimit, cfg.CryptoKey)
 	metricsService.Start(cfg.PollInterval, cfg.ReportInterval)
 
 	sigChan := make(chan os.Signal, 1)
