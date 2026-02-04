@@ -74,3 +74,76 @@ func ParseDuration(s string) (int, error) {
 
 	return duration, nil
 }
+
+// GetConfigFilePath returns the path to the configuration file from the flag or CONFIG environment variable.
+//
+// This function checks if a config file path was provided via the configFlag parameter.
+// If not, it checks the CONFIG environment variable.
+//
+// Parameters:
+//   - configFlag: The value from the config flag (-c/-config)
+//
+// Returns:
+//   - string: The path to the config file, or empty string if not specified
+//
+// Example:
+//
+//	configFile := config.GetConfigFilePath("")
+//	if configFile != "" {
+//	    // load from file
+//	}
+func GetConfigFilePath(configFlag string) string {
+	if configFlag != "" {
+		return configFlag
+	}
+	return os.Getenv("CONFIG")
+}
+
+// ApplyStringIfDefault applies string value from JSON config only if current value equals default.
+//
+// Parameters:
+//   - current: Pointer to current config value
+//   - defaultValue: Default value to compare against
+//   - jsonValue: Value from JSON config
+//
+// Example:
+//
+//	ApplyStringIfDefault(&cfg.Address, "localhost:8080", jsonCfg.Address)
+func ApplyStringIfDefault(current *string, defaultValue, jsonValue string) {
+	if jsonValue != "" && *current == defaultValue {
+		*current = jsonValue
+	}
+}
+
+// ApplyDurationIfDefault parses and applies duration from JSON config only if current value equals default.
+//
+// Parameters:
+//   - current: Pointer to current config value
+//   - defaultValue: Default value to compare against
+//   - jsonValue: Duration string from JSON config
+//
+// Example:
+//
+//	ApplyDurationIfDefault(&cfg.PollInterval, 2, jsonCfg.PollInterval)
+func ApplyDurationIfDefault(current *int, defaultValue int, jsonValue string) {
+	if jsonValue != "" && *current == defaultValue {
+		if duration, err := ParseDuration(jsonValue); err == nil {
+			*current = duration
+		}
+	}
+}
+
+// ApplyBoolIfDefault applies boolean value from JSON config only if current value is false and JSON value is true.
+//
+// Parameters:
+//   - current: Pointer to current config value
+//   - jsonValue: Boolean value from JSON config
+//
+// Example:
+//
+//	ApplyBoolIfDefault(&cfg.Restore, jsonCfg.Restore)
+func ApplyBoolIfDefault(current *bool, jsonValue bool) {
+	if jsonValue && !*current {
+		*current = jsonValue
+	}
+}

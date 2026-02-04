@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"os"
 
 	"github.com/ilyakaznacheev/cleanenv"
 
@@ -32,108 +31,78 @@ type Config struct {
 	AuditFile       string `env:"AUDIT_FILE"`
 	AuditURL        string `env:"AUDIT_URL"`
 	CryptoKey       string `env:"CRYPTO_KEY"`
-	configFile      string
+
+	// ConfigFile is the path to the configuration file if specified
+	ConfigFile string
 }
 
-var config = Config{
-	Address:         "localhost:8080",
-	StoreInterval:   300,
-	FileStoragePath: "",
-	Restore:         false,
-	DSN:             "",
-	Key:             "",
-	AuditFile:       "",
-	AuditURL:        "",
-	CryptoKey:       "",
-}
-
-// Init registers flags, parses them, and initializes config from all sources.
+// NewConfig initializes and returns configuration from all sources.
 // Priority order (lowest to highest):
 // 1. Default values
 // 2. Config file (if specified via -c/-config or CONFIG env var)
 // 3. Environment variables
 // 4. Command line flags (highest priority)
-// Must be called before using any config values.
-func Init() error {
+//
+// Returns a pointer to the initialized Config structure.
+func NewConfig() (*Config, error) {
+	cfg := &Config{
+		Address:         "localhost:8080",
+		StoreInterval:   300,
+		FileStoragePath: "",
+		Restore:         false,
+		DSN:             "",
+		Key:             "",
+		AuditFile:       "",
+		AuditURL:        "",
+		CryptoKey:       "",
+	}
+
 	// Register flags with default values
-	flag.StringVar(&config.Address, "a", "localhost:8080", "HTTP address to listen on")
-	flag.IntVar(&config.StoreInterval, "i", 300, "Store interval in seconds (0 = synchronous)")
-	flag.StringVar(&config.FileStoragePath, "f", "", "Path to file storage")
-	flag.BoolVar(&config.Restore, "r", false, "Restore metrics from file")
-	flag.StringVar(&config.DSN, "d", "", "PostgreSQL DSN")
-	flag.StringVar(&config.Key, "k", "", "Key for signing requests")
-	flag.StringVar(&config.AuditFile, "audit-file", "", "Path to audit log file")
-	flag.StringVar(&config.AuditURL, "audit-url", "", "URL for audit server")
-	flag.StringVar(&config.CryptoKey, "crypto-key", "", "Path to private key file for decryption")
-	flag.StringVar(&config.configFile, "c", "", "Path to config file")
-	flag.StringVar(&config.configFile, "config", "", "Path to config file")
+	flag.StringVar(&cfg.Address, "a", "localhost:8080", "HTTP address to listen on")
+	flag.IntVar(&cfg.StoreInterval, "i", 300, "Store interval in seconds (0 = synchronous)")
+	flag.StringVar(&cfg.FileStoragePath, "f", "", "Path to file storage")
+	flag.BoolVar(&cfg.Restore, "r", false, "Restore metrics from file")
+	flag.StringVar(&cfg.DSN, "d", "", "PostgreSQL DSN")
+	flag.StringVar(&cfg.Key, "k", "", "Key for signing requests")
+	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Path to audit log file")
+	flag.StringVar(&cfg.AuditURL, "audit-url", "", "URL for audit server")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", "", "Path to private key file for decryption")
+
+	var configFileFlag string
+	flag.StringVar(&configFileFlag, "c", "", "Path to config file")
+	flag.StringVar(&configFileFlag, "config", "", "Path to config file")
 	flag.Parse()
 
 	// Get config file path from flag or environment variable
-	configFile := config.configFile
-	if configFile == "" {
-		configFile = os.Getenv("CONFIG")
-	}
+	cfg.ConfigFile = configpkg.GetConfigFilePath(configFileFlag)
 
 	// Load JSON config if file is specified (lower priority than env/flags)
-	if configFile != "" {
-		config.configFile = configFile
+	if cfg.ConfigFile != "" {
 		var jsonCfg JSONConfig
-		if err := configpkg.LoadConfigFile(configFile, &jsonCfg); err != nil {
-			return err
+		if err := configpkg.LoadConfigFile(cfg.ConfigFile, &jsonCfg); err != nil {
+			return nil, err
 		}
-		applyConfig(&jsonCfg)
+		cfg.applyJSONConfig(&jsonCfg)
 	}
 
 	// Apply environment variables (higher priority than config file, lower than flags)
-	if err := cleanenv.ReadEnv(&config); err != nil {
-		return err
+	if err := cleanenv.ReadEnv(cfg); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return cfg, nil
 }
 
-// ConfigFile returns the path to config file if specified
-func ConfigFile() string {
-	return config.configFile
-}
-
-// applyConfig applies config from JSON file with lower priority than env/flags
+// applyJSONConfig applies config from JSON file with lower priority than env/flags
 // Only applies values if the current value is still the default
-func applyConfig(cfg *JSONConfig) {
-	// Only apply if current value is default
-	if cfg.Address != "" && config.Address == "localhost:8080" {
-		config.Address = cfg.Address
-	}
-
-	if cfg.StoreInterval != "" && config.StoreInterval == 300 {
-		if duration, err := configpkg.ParseDuration(cfg.StoreInterval); err == nil {
-			config.StoreInterval = duration
-		}
-	}
-
-	if cfg.StoreFile != "" && config.FileStoragePath == "" {
-		config.FileStoragePath = cfg.StoreFile
-	}
-
-	if cfg.DatabaseDSN != "" && config.DSN == "" {
-		config.DSN = cfg.DatabaseDSN
-	}
-
-	if cfg.AuditFile != "" && config.AuditFile == "" {
-		config.AuditFile = cfg.AuditFile
-	}
-
-	if cfg.AuditURL != "" && config.AuditURL == "" {
-		config.AuditURL = cfg.AuditURL
-	}
-
-	if cfg.CryptoKey != "" && config.CryptoKey == "" {
-		config.CryptoKey = cfg.CryptoKey
-	}
-
-	// For boolean flag, only apply if it's true in config and false in current config
-	if cfg.Restore && !config.Restore {
-		config.Restore = cfg.Restore
-	}
+func (c *Config) applyJSONConfig(cfg *JSONConfig) {
+	// Apply JSON config values only if current values are still default
+	configpkg.ApplyStringIfDefault(&c.Address, "localhost:8080", cfg.Address)
+	configpkg.ApplyDurationIfDefault(&c.StoreInterval, 300, cfg.StoreInterval)
+	configpkg.ApplyStringIfDefault(&c.FileStoragePath, "", cfg.StoreFile)
+	configpkg.ApplyStringIfDefault(&c.DSN, "", cfg.DatabaseDSN)
+	configpkg.ApplyStringIfDefault(&c.AuditFile, "", cfg.AuditFile)
+	configpkg.ApplyStringIfDefault(&c.AuditURL, "", cfg.AuditURL)
+	configpkg.ApplyStringIfDefault(&c.CryptoKey, "", cfg.CryptoKey)
+	configpkg.ApplyBoolIfDefault(&c.Restore, cfg.Restore)
 }

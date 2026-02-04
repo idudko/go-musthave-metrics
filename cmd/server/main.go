@@ -35,7 +35,7 @@ func buildInfo(value string) string {
 	return value
 }
 
-func newServer(config Config) (*chi.Mux, repository.Storage, error) {
+func newServer(config *Config) (*chi.Mux, repository.Storage, error) {
 	var storage repository.Storage
 	var pinger handler.DBPinger
 	var err error
@@ -119,7 +119,8 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 }
 
 func main() {
-	if err := Init(); err != nil {
+	cfg, err := NewConfig()
+	if err != nil {
 		log.Fatalf("Failed to initialize config: %v", err)
 	}
 
@@ -127,7 +128,7 @@ func main() {
 	fmt.Printf("Build date: %s\n", buildInfo(buildDate))
 	fmt.Printf("Build commit: %s\n", buildInfo(buildCommit))
 
-	r, storage, err := newServer(config)
+	r, storage, err := newServer(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -136,30 +137,30 @@ func main() {
 		defer closer.Close()
 	}
 
-	fmt.Printf("Server is running on %s\n", config.Address)
-	if config.Key != "" {
+	fmt.Printf("Server is running on %s\n", cfg.Address)
+	if cfg.Key != "" {
 		fmt.Println("Hash validation enabled")
 	}
 
-	if config.AuditFile != "" {
-		fmt.Printf("Audit file: %s\n", config.AuditFile)
+	if cfg.AuditFile != "" {
+		fmt.Printf("Audit file: %s\n", cfg.AuditFile)
 	}
 
-	if config.AuditURL != "" {
-		fmt.Printf("Audit URL: %s\n", config.AuditURL)
+	if cfg.AuditURL != "" {
+		fmt.Printf("Audit URL: %s\n", cfg.AuditURL)
 	}
 
-	if config.CryptoKey != "" {
-		fmt.Printf("Crypto key: %s\n", config.CryptoKey)
+	if cfg.CryptoKey != "" {
+		fmt.Printf("Crypto key: %s\n", cfg.CryptoKey)
 	}
 
-	if ConfigFile() != "" {
-		fmt.Printf("Config file: %s\n", ConfigFile())
+	if cfg.ConfigFile != "" {
+		fmt.Printf("Config file: %s\n", cfg.ConfigFile)
 	}
 
 	// Create HTTP server
 	srv := &http.Server{
-		Addr:    config.Address,
+		Addr:    cfg.Address,
 		Handler: r,
 	}
 

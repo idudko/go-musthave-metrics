@@ -25,20 +25,21 @@ func buildInfo(value string) string {
 
 func main() {
 	// Initialize configuration from all sources
-	if err := Init(); err != nil {
+	cfg, err := NewConfig()
+	if err != nil {
 		log.Fatalf("Failed to initialize config: %v", err)
 	}
 
-	if config.RateLimit <= 0 {
-		config.RateLimit = 1
+	if cfg.RateLimit <= 0 {
+		cfg.RateLimit = 1
 	}
 
-	if config.configFile != "" {
-		log.Printf("Config file: %s", config.configFile)
+	if cfg.ConfigFile != "" {
+		log.Printf("Config file: %s", cfg.ConfigFile)
 	}
 
-	metricsService := agent.NewMetricsService(config.Address, config.Key, config.UseBatch, config.RateLimit, config.CryptoKey)
-	metricsService.Start(config.PollInterval, config.ReportInterval)
+	metricsService := agent.NewMetricsService(cfg.Address, cfg.Key, cfg.UseBatch, cfg.RateLimit, cfg.CryptoKey)
+	metricsService.Start(cfg.PollInterval, cfg.ReportInterval)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)

@@ -1,7 +1,9 @@
 package crypto
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -154,8 +156,8 @@ func LoadPrivateKey(path string) (*rsa.PrivateKey, error) {
 //	ciphertext, err := crypto.Encrypt([]byte("secret message"), pubKey)
 func Encrypt(plaintext []byte, pubKey *rsa.PublicKey) ([]byte, error) {
 	ciphertext, err := rsa.EncryptOAEP(
-		nil, // hash function parameters (nil = SHA-256 by default)
-		nil, // random source (nil = crypto/rand.Reader)
+		sha256.New(), // hash function parameters (explicitly SHA-256)
+		rand.Reader,  // random source (explicitly crypto/rand.Reader)
 		pubKey,
 		plaintext,
 		nil, // label (optional associated data)
@@ -183,8 +185,8 @@ func Encrypt(plaintext []byte, pubKey *rsa.PublicKey) ([]byte, error) {
 //	plaintext, err := crypto.Decrypt(ciphertext, privKey)
 func Decrypt(ciphertext []byte, privKey *rsa.PrivateKey) ([]byte, error) {
 	plaintext, err := rsa.DecryptOAEP(
-		nil, // hash function parameters (nil = SHA-256 by default)
-		nil, // random source (nil = crypto/rand.Reader)
+		sha256.New(), // hash function parameters (explicitly SHA-256)
+		rand.Reader,  // random source (explicitly crypto/rand.Reader)
 		privKey,
 		ciphertext,
 		nil, // label (optional associated data)

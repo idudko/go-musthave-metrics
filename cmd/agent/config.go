@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"os"
 
 	"github.com/ilyakaznacheev/cleanenv"
 
@@ -27,85 +26,69 @@ type Config struct {
 	RateLimit      int    `env:"RATE_LIMIT"`
 	CryptoKey      string `env:"CRYPTO_KEY"`
 
-	// Internal field for config file path
-	configFile string
+	// ConfigFile is the path to the configuration file if specified
+	ConfigFile string
 }
 
-var config = Config{
-	Address:        "localhost:8080",
-	PollInterval:   2,
-	ReportInterval: 10,
-	UseBatch:       true,
-	Key:            "",
-	RateLimit:      1,
-	CryptoKey:      "",
-}
-
-// applyConfig applies config from JSON file with lower priority than env/flags
-// Only applies values if the current value is still the default
-func applyConfig(cfg *JSONConfig) {
-	// Only apply if current value is default
-	if cfg.Address != "" && config.Address == "localhost:8080" {
-		config.Address = cfg.Address
-	}
-
-	if cfg.PollInterval != "" && config.PollInterval == 2 {
-		if duration, err := configpkg.ParseDuration(cfg.PollInterval); err == nil {
-			config.PollInterval = duration
-		}
-	}
-
-	if cfg.ReportInterval != "" && config.ReportInterval == 10 {
-		if duration, err := configpkg.ParseDuration(cfg.ReportInterval); err == nil {
-			config.ReportInterval = duration
-		}
-	}
-
-	if cfg.CryptoKey != "" && config.CryptoKey == "" {
-		config.CryptoKey = cfg.CryptoKey
-	}
-}
-
-// Init registers flags and initializes configuration from all sources.
+// NewConfig initializes and returns configuration from all sources.
 // Priority order (lowest to highest):
 // 1. Default values
 // 2. JSON config file (if provided via -c or -config or CONFIG env var)
 // 3. Environment variables
 // 4. Command line flags (highest priority)
-// Must be called before using config values.
-func Init() error {
+//
+// Returns a pointer to the initialized Config structure.
+func NewConfig() (*Config, error) {
+	cfg := &Config{
+		Address:        "localhost:8080",
+		PollInterval:   2,
+		ReportInterval: 10,
+		UseBatch:       true,
+		Key:            "",
+		RateLimit:      1,
+		CryptoKey:      "",
+	}
+
 	// Register flags with default values
-	flag.StringVar(&config.Address, "a", "localhost:8080", "HTTP address to listen on")
-	flag.IntVar(&config.PollInterval, "p", 2, "Poll interval in seconds")
-	flag.IntVar(&config.ReportInterval, "r", 10, "Report interval in seconds")
-	flag.BoolVar(&config.UseBatch, "b", true, "Use batch reporting")
-	flag.StringVar(&config.Key, "k", "", "Key for signing requests")
-	flag.IntVar(&config.RateLimit, "l", 1, "Rate limit for concurrent requests")
-	flag.StringVar(&config.CryptoKey, "crypto-key", "", "Path to public key file for encryption")
-	flag.StringVar(&config.configFile, "c", "", "Path to config file")
-	flag.StringVar(&config.configFile, "config", "", "Path to config file")
+	flag.StringVar(&cfg.Address, "a", "localhost:8080", "HTTP address to listen on")
+	flag.IntVar(&cfg.PollInterval, "p", 2, "Poll interval in seconds")
+	flag.IntVar(&cfg.ReportInterval, "r", 10, "Report interval in seconds")
+	flag.BoolVar(&cfg.UseBatch, "b", true, "Use batch reporting")
+	flag.StringVar(&cfg.Key, "k", "", "Key for signing requests")
+	flag.IntVar(&cfg.RateLimit, "l", 1, "Rate limit for concurrent requests")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", "", "Path to public key file for encryption")
+
+	var configFileFlag string
+	flag.StringVar(&configFileFlag, "c", "", "Path to config file")
+	flag.StringVar(&configFileFlag, "config", "", "Path to config file")
 	flag.Parse()
 
 	// Get config file path from flag or environment variable
-	configFile := config.configFile
-	if configFile == "" {
-		configFile = os.Getenv("CONFIG")
-	}
+	cfg.ConfigFile = configpkg.GetConfigFilePath(configFileFlag)
 
 	// Load JSON config if file is specified (lower priority than env/flags)
-	if configFile != "" {
-		config.configFile = configFile
+	if cfg.ConfigFile != "" {
 		var jsonCfg JSONConfig
-		if err := configpkg.LoadConfigFile(configFile, &jsonCfg); err != nil {
-			return err
+		if err := configpkg.LoadConfigFile(cfg.ConfigFile, &jsonCfg); err != nil {
+			return nil, err
 		}
-		applyConfig(&jsonCfg)
+		cfg.applyJSONConfig(&jsonCfg)
 	}
 
 	// Apply environment variables (higher priority than config file, lower than flags)
-	if err := cleanenv.ReadEnv(&config); err != nil {
-		return err
+	if err := cleanenv.ReadEnv(cfg); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return cfg, nil
+}
+
+// applyJSONConfig applies config from JSON file with lower priority than env/flags
+// Only applies values if the current value is still the default
+func (c *Config) applyJSONConfig(cfg *JSONConfig) {
+	// Apply JSON config values only if current values are still default
+	configpkg.ApplyStringIfDefault(&c.Address, "localhost:8080", cfg.Address)
+	configpkg.ApplyDurationIfDefault(&c.PollInterval, 2, cfg.PollInterval)
+	configpkg.ApplyDurationIfDefault(&c.ReportInterval, 10, cfg.ReportInterval)
+	configpkg.ApplyStringIfDefault(&c.CryptoKey, "", cfg.CryptoKey)
 }
