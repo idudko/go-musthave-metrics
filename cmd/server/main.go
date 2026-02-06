@@ -1,17 +1,19 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	pprofhttp "net/http/pprof"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/ilyakaznacheev/cleanenv"
 
 	"github.com/idudko/go-musthave-metrics/internal/audit"
 	"github.com/idudko/go-musthave-metrics/internal/handler"
@@ -26,7 +28,6 @@ var (
 	buildCommit  string
 )
 
-// buildInfo returns the value or "N/A" if empty
 func buildInfo(value string) string {
 	if value == "" {
 		return "N/A"
@@ -34,29 +35,7 @@ func buildInfo(value string) string {
 	return value
 }
 
-type Config struct {
-	Address         string `env:"ADDRESS"`
-	StoreInterval   int    `env:"STORE_INTERVAL"`
-	FileStoragePath string `env:"FILE_STORAGE_PATH"`
-	Restore         bool   `env:"RESTORE"`
-	DSN             string `env:"DATABASE_DSN"`
-	Key             string `env:"KEY"`
-	AuditFile       string `env:"AUDIT_FILE"`
-	AuditURL        string `env:"AUDIT_URL"`
-}
-
-var config = Config{
-	Address:         "localhost:8080",
-	StoreInterval:   300,
-	FileStoragePath: "",
-	Restore:         false,
-	DSN:             "",
-	Key:             "",
-	AuditFile:       "",
-	AuditURL:        "",
-}
-
-func newServer(config Config) (*chi.Mux, repository.Storage, error) {
+func newServer(config *Config) (*chi.Mux, repository.Storage, error) {
 	var storage repository.Storage
 	var pinger handler.DBPinger
 	var err error
@@ -97,6 +76,7 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.DecryptionMiddleware(config.CryptoKey))
 	r.Use(middleware.HashValidationMiddleware(config.Key))
 	r.Use(middleware.GzipRequestMiddleware)
 	r.Use(chimiddleware.Compress(5, "application/json", "text/html"))
@@ -112,7 +92,6 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 	r.Get("/value/{type}/{name}", h.GetMetricValueHandler)
 	r.Get("/", h.ListMetricsHandler)
 
-	// Add pprof endpoints for profiling
 	pprofRouter := chi.NewRouter()
 	pprofRouter.Get("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/debug/pprof/heap", http.StatusTemporaryRedirect)
@@ -140,28 +119,16 @@ func newServer(config Config) (*chi.Mux, repository.Storage, error) {
 }
 
 func main() {
-	if err := cleanenv.ReadEnv(&config); err != nil {
-		log.Fatalf("Failed to read config from env: %v", err)
+	cfg, err := NewConfig()
+	if err != nil {
+		log.Fatalf("Failed to initialize config: %v", err)
 	}
 
-	// Print build information
 	fmt.Printf("Build version: %s\n", buildInfo(buildVersion))
 	fmt.Printf("Build date: %s\n", buildInfo(buildDate))
 	fmt.Printf("Build commit: %s\n", buildInfo(buildCommit))
 
-	fset := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	fset.StringVar(&config.Address, "a", config.Address, "HTTP address to listen on")
-	fset.IntVar(&config.StoreInterval, "i", config.StoreInterval, "Store interval in seconds (0 = synchronous)")
-	fset.StringVar(&config.FileStoragePath, "f", config.FileStoragePath, "Path to file storage")
-	fset.BoolVar(&config.Restore, "r", config.Restore, "Restore metrics from file")
-	fset.StringVar(&config.DSN, "d", config.DSN, "PostgreSQL DSN")
-	fset.StringVar(&config.Key, "k", config.Key, "Key for signing requests")
-	fset.StringVar(&config.AuditFile, "audit-file", config.AuditFile, "Path to audit log file")
-	fset.StringVar(&config.AuditURL, "audit-url", config.AuditURL, "URL for audit server")
-	fset.Usage = cleanenv.FUsage(fset.Output(), &config, nil, fset.Usage)
-	fset.Parse(os.Args[1:])
-
-	r, storage, err := newServer(config)
+	r, storage, err := newServer(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -170,18 +137,81 @@ func main() {
 		defer closer.Close()
 	}
 
-	fmt.Printf("Server is running on %s\n", config.Address)
-	if config.Key != "" {
+	fmt.Printf("Server is running on %s\n", cfg.Address)
+	if cfg.Key != "" {
 		fmt.Println("Hash validation enabled")
 	}
 
-	if config.AuditFile != "" {
-		fmt.Printf("Audit file: %s\n", config.AuditFile)
+	if cfg.AuditFile != "" {
+		fmt.Printf("Audit file: %s\n", cfg.AuditFile)
 	}
 
-	if config.AuditURL != "" {
-		fmt.Printf("Audit URL: %s\n", config.AuditURL)
+	if cfg.AuditURL != "" {
+		fmt.Printf("Audit URL: %s\n", cfg.AuditURL)
 	}
 
-	log.Fatal(http.ListenAndServe(config.Address, r))
+	if cfg.CryptoKey != "" {
+		fmt.Printf("Crypto key: %s\n", cfg.CryptoKey)
+	}
+
+	if cfg.ConfigFile != "" {
+		fmt.Printf("Config file: %s\n", cfg.ConfigFile)
+	}
+
+	// Create HTTP server
+	srv := &http.Server{
+		Addr:    cfg.Address,
+		Handler: r,
+	}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Setup signal notification for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	// Wait for shutdown signal
+	sig := <-sigChan
+	log.Printf("Received signal %v, initiating graceful shutdown...", sig)
+
+	// Create shutdown context with timeout
+	shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownRelease()
+
+	// Gracefully shutdown HTTP server
+	log.Println("Shutting down HTTP server...")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	} else {
+		log.Println("HTTP server stopped gracefully")
+	}
+
+	// Save metrics before shutdown (for file storage)
+	if fileStorage, ok := storage.(interface {
+		Save(ctx context.Context) error
+	}); ok {
+		log.Println("Saving metrics to file...")
+		if err := fileStorage.Save(context.Background()); err != nil {
+			log.Printf("Error saving metrics: %v", err)
+		} else {
+			log.Println("Metrics saved successfully")
+		}
+	}
+
+	// Close storage connection
+	if closer, ok := storage.(io.Closer); ok {
+		log.Println("Closing storage...")
+		if err := closer.Close(); err != nil {
+			log.Printf("Error closing storage: %v", err)
+		} else {
+			log.Println("Storage closed successfully")
+		}
+	}
+
+	log.Println("Server shutdown complete")
 }
