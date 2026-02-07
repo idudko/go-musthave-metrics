@@ -8,6 +8,7 @@ import (
 
 	"github.com/idudko/go-musthave-metrics/internal/agent/grpc"
 	"github.com/idudko/go-musthave-metrics/internal/model"
+	"github.com/idudko/go-musthave-metrics/internal/netutil"
 )
 
 type MetricsService struct {
@@ -61,7 +62,7 @@ func NewMetricsService(serverAddress, grpcAddress, key string, useBatch bool, ra
 
 	// Получаем локальный IP адрес для отправки в метаданных
 	if service.useGRPC {
-		localIP, err := grpc.GetLocalIP()
+		localIP, err := netutil.GetLocalIP()
 		if err != nil {
 			log.Printf("Failed to get local IP: %v. Using empty IP.", err)
 			service.localIP = ""

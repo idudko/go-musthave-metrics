@@ -97,17 +97,13 @@ func TrustedSubnetInterceptor(trustedSubnet string) grpc.UnaryServerInterceptor 
 	}
 }
 
-// StartServer запускает gRPC сервер
-func StartServer(ctx context.Context, address string, trustedSubnet string, storage repository.Storage) (*grpc.Server, error) {
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return nil, err
-	}
+// createListener создаёт TCP listener для gRPC сервера
+func createListener(address string) (net.Listener, error) {
+	return net.Listen("tcp", address)
+}
 
-	// Создаём интерцептор для проверки доверенной подсети
-	interceptor := TrustedSubnetInterceptor(trustedSubnet)
-
-	// Создаём gRPC сервер с интерцептором
+// createServer создаёт и конфигурирует gRPC сервер с интерцептором и сервисом метрик
+func createServer(interceptor grpc.UnaryServerInterceptor, storage repository.Storage) *grpc.Server {
 	s := grpc.NewServer(grpc.ChainUnaryInterceptor(interceptor))
 
 	// Регистрируем сервис метрик
@@ -116,10 +112,15 @@ func StartServer(ctx context.Context, address string, trustedSubnet string, stor
 	}
 	proto.RegisterMetricsServer(s, metricsServer)
 
+	return s
+}
+
+// startServerWithGracefulShutdown запускает gRPC сервер и обрабатывает graceful shutdown
+func startServerWithGracefulShutdown(ctx context.Context, server *grpc.Server, lis net.Listener, address string) {
 	// Запускаем сервер в отдельной горутине
 	go func() {
 		log.Info().Str("address", address).Msg("Starting gRPC server")
-		if err := s.Serve(lis); err != nil {
+		if err := server.Serve(lis); err != nil {
 			log.Error().Err(err).Msg("Failed to start gRPC server")
 		}
 	}()
@@ -128,8 +129,25 @@ func StartServer(ctx context.Context, address string, trustedSubnet string, stor
 	go func() {
 		<-ctx.Done()
 		log.Info().Msg("Shutting down gRPC server gracefully...")
-		s.GracefulStop()
+		server.GracefulStop()
 	}()
+}
+
+// StartServer запускает gRPC сервер
+func StartServer(ctx context.Context, address string, trustedSubnet string, storage repository.Storage) (*grpc.Server, error) {
+	lis, err := createListener(address)
+	if err != nil {
+		return nil, err
+	}
+
+	// Создаём интерцептор для проверки доверенной подсети
+	interceptor := TrustedSubnetInterceptor(trustedSubnet)
+
+	// Создаём gRPC сервер с интерцептором
+	s := createServer(interceptor, storage)
+
+	// Запускаем сервер с graceful shutdown
+	startServerWithGracefulShutdown(ctx, s, lis, address)
 
 	return s, nil
 }

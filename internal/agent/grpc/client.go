@@ -2,8 +2,6 @@ package grpc
 
 import (
 	"context"
-	"errors"
-	"net"
 	"time"
 
 	"google.golang.org/grpc"
@@ -47,16 +45,10 @@ func (c *MetricsClient) Close() error {
 	return nil
 }
 
-// UpdateMetrics отправляет метрики на сервер через gRPC
-// metrics - список метрик для отправки
-// clientIP - IP-адрес клиента, который будет добавлен в метаданные
-func (c *MetricsClient) UpdateMetrics(ctx context.Context, metrics []model.Metrics, clientIP string) error {
-	// Создаём запрос с метриками
-	req := &proto.UpdateMetricsRequest{
-		Metrics: make([]*proto.Metric, 0, len(metrics)),
-	}
+// convertMetricsToProto конвертирует метрики модели в protobuf формат
+func convertMetricsToProto(metrics []model.Metrics) []*proto.Metric {
+	protoMetrics := make([]*proto.Metric, 0, len(metrics))
 
-	// Конвертируем метрики в protobuf формат
 	for _, m := range metrics {
 		protoMetric := &proto.Metric{
 			Id:   m.ID,
@@ -74,7 +66,19 @@ func (c *MetricsClient) UpdateMetrics(ctx context.Context, metrics []model.Metri
 			}
 		}
 
-		req.Metrics = append(req.Metrics, protoMetric)
+		protoMetrics = append(protoMetrics, protoMetric)
+	}
+
+	return protoMetrics
+}
+
+// UpdateMetrics отправляет метрики на сервер через gRPC
+// metrics - список метрик для отправки
+// clientIP - IP-адрес клиента, который будет добавлен в метаданные
+func (c *MetricsClient) UpdateMetrics(ctx context.Context, metrics []model.Metrics, clientIP string) error {
+	// Создаём запрос с метриками
+	req := &proto.UpdateMetricsRequest{
+		Metrics: convertMetricsToProto(metrics),
 	}
 
 	// Добавляем контекст с таймаутом
@@ -108,46 +112,4 @@ func convertStringToProtoMType(mType string) proto.Metric_MType {
 	default:
 		return proto.Metric_MType(0)
 	}
-}
-
-// GetLocalIP возвращает локальный IP-адрес клиента
-func GetLocalIP() (string, error) {
-	// Получаем все сетевые интерфейсы
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return "", err
-	}
-
-	// Проходим по всем интерфейсам и ищем подходящий IP
-	for _, iface := range interfaces {
-		// Пропускаем loopback и неактивные интерфейсы
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-
-		addresses, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-
-		for _, addr := range addresses {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-
-			// Пропускаем IPv6 и loopback адреса
-			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
-				continue
-			}
-
-			return ip.String(), nil
-		}
-	}
-
-	// Если не нашли подходящий IP, возвращаем ошибку
-	return "", errors.New("no network interface found")
 }
