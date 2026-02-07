@@ -1,8 +1,10 @@
 {
     "address": "localhost:8080",
+    "grpc_address": "localhost:3200",
     "restore": true,
     "store_interval": "1s",
     "store_file": "/path/to/file.db",
     "database_dsn": "",
-    "crypto_key": "/path/to/key.pem"
+    "crypto_key": "/path/to/key.pem",
+    "trusted_subnet": ""
 }

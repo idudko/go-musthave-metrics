@@ -6,18 +6,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/idudko/go-musthave-metrics/internal/agent/grpc"
 	"github.com/idudko/go-musthave-metrics/internal/model"
+	"github.com/idudko/go-musthave-metrics/internal/netutil"
 )
 
 type MetricsService struct {
 	collector     *Collector
 	sender        *Sender
 	serverAddress string
+	grpcAddress   string
 	useBatch      bool
 	rateLimit     int
 	cryptoKey     string
 
 	metricsChan chan []byte
+	grpcClient  *grpc.MetricsClient
+	useGRPC     bool
+	localIP     string
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -25,13 +31,14 @@ type MetricsService struct {
 	workerPool *WorkerPool
 }
 
-func NewMetricsService(serverAddress, key string, useBatch bool, rateLimit int, cryptoKey string) *MetricsService {
+func NewMetricsService(serverAddress, grpcAddress, key string, useBatch bool, rateLimit int, cryptoKey string) *MetricsService {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &MetricsService{
+	service := &MetricsService{
 		collector:     NewCollector(key),
 		sender:        NewSender(key, cryptoKey),
 		serverAddress: serverAddress,
+		grpcAddress:   grpcAddress,
 		useBatch:      useBatch,
 		rateLimit:     rateLimit,
 		cryptoKey:     cryptoKey,
@@ -40,6 +47,31 @@ func NewMetricsService(serverAddress, key string, useBatch bool, rateLimit int, 
 		cancel:        cancel,
 		workerPool:    NewWorkerPool(rateLimit),
 	}
+
+	// Инициализируем gRPC клиент, если указан адрес
+	if grpcAddress != "" {
+		client, err := grpc.NewMetricsClient(grpcAddress)
+		if err != nil {
+			log.Printf("Failed to create gRPC client: %v. Falling back to HTTP.", err)
+		} else {
+			service.grpcClient = client
+			service.useGRPC = true
+			log.Printf("gRPC client initialized for address: %s", grpcAddress)
+		}
+	}
+
+	// Получаем локальный IP адрес для отправки в метаданных
+	if service.useGRPC {
+		localIP, err := netutil.GetLocalIP()
+		if err != nil {
+			log.Printf("Failed to get local IP: %v. Using empty IP.", err)
+			service.localIP = ""
+		} else {
+			service.localIP = localIP
+		}
+	}
+
+	return service
 }
 
 func (s *MetricsService) Start(pollInterval, reportInterval int) {
@@ -81,6 +113,11 @@ func (s *MetricsService) Shutdown() {
 	log.Println("Agent shutdown: waiting for tasks to complete...")
 	s.workerPool.Stop()
 
+	// Close gRPC client if it was initialized
+	if s.grpcClient != nil {
+		s.grpcClient.Close()
+	}
+
 	// Wait for all goroutines to finish
 	s.wg.Wait()
 
@@ -95,53 +132,55 @@ func (s *MetricsService) sendFinalMetrics() {
 
 	gauges, counters := s.collector.GetMetrics()
 
+	// Convert gauges and counters to model.Metrics slice
+	metrics := make([]model.Metrics, 0, len(counters)+len(gauges))
+
+	for name, value := range counters {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Counter,
+			Delta: &value,
+		}
+		metrics = append(metrics, m)
+	}
+	for name, value := range gauges {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Gauge,
+			Value: &value,
+		}
+		metrics = append(metrics, m)
+	}
+
+	if s.useGRPC && len(metrics) > 0 {
+		// Send via gRPC
+		if err := s.grpcClient.UpdateMetrics(ctx, metrics, s.localIP); err != nil {
+			log.Printf("Error sending final metrics via gRPC: %v. Falling back to HTTP.", err)
+			// Fallback to HTTP if gRPC fails
+			s.sendMetricsHTTP(ctx, metrics)
+		}
+	} else if len(metrics) > 0 {
+		// Send via HTTP
+		s.sendMetricsHTTP(ctx, metrics)
+	}
+}
+
+// sendMetricsHTTP отправляет метрики через HTTP
+func (s *MetricsService) sendMetricsHTTP(ctx context.Context, metrics []model.Metrics) error {
 	if s.useBatch {
-		metrics := make([]*model.Metrics, 0, len(counters)+len(gauges))
-
-		for name, value := range counters {
-			m := model.Metrics{
-				ID:    name,
-				MType: model.Counter,
-				Delta: &value,
-			}
-			metrics = append(metrics, &m)
+		// Convert to pointer slice for batch sending
+		metricPtrs := make([]*model.Metrics, len(metrics))
+		for i := range metrics {
+			metricPtrs[i] = &metrics[i]
 		}
-		for name, value := range gauges {
-			m := model.Metrics{
-				ID:    name,
-				MType: model.Gauge,
-				Value: &value,
-			}
-			metrics = append(metrics, &m)
-		}
-
-		if len(metrics) > 0 {
-			if err := s.sender.SendMetricsBatch(ctx, s.serverAddress, metrics); err != nil {
-				log.Printf("Error sending final metrics batch: %v", err)
-			}
-		}
+		return s.sender.SendMetricsBatch(ctx, s.serverAddress, metricPtrs)
 	} else {
-		for name, value := range counters {
-			m := model.Metrics{
-				ID:    name,
-				MType: model.Counter,
-				Delta: &value,
-			}
+		for _, m := range metrics {
 			if err := s.sender.SendMetricJSON(ctx, s.serverAddress, &m); err != nil {
-				log.Printf("Error sending final counter metric %s: %v", name, err)
+				return err
 			}
 		}
-
-		for name, value := range gauges {
-			m := model.Metrics{
-				ID:    name,
-				MType: model.Gauge,
-				Value: &value,
-			}
-			if err := s.sender.SendMetricJSON(ctx, s.serverAddress, &m); err != nil {
-				log.Printf("Error sending final gauge metric %s: %v", name, err)
-			}
-		}
+		return nil
 	}
 }
 
@@ -196,57 +235,45 @@ func (s *MetricsService) sendMetrics(reportInterval int) {
 func (s *MetricsService) enqueueMetricsForSending() {
 	gauges, counters := s.collector.GetMetrics()
 
-	if s.useBatch {
+	// Convert to model.Metrics slice
+	metrics := make([]model.Metrics, 0, len(counters)+len(gauges))
+
+	for name, value := range counters {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Counter,
+			Delta: &value,
+		}
+		metrics = append(metrics, m)
+	}
+	for name, value := range gauges {
+		m := model.Metrics{
+			ID:    name,
+			MType: model.Gauge,
+			Value: &value,
+		}
+		metrics = append(metrics, m)
+	}
+
+	if s.useGRPC && len(metrics) > 0 {
+		// Send via gRPC (always batch)
+		metricsCopy := make([]model.Metrics, len(metrics))
+		copy(metricsCopy, metrics)
 		s.workerPool.EnqueueTask(func(ctx context.Context) error {
-			metrics := make([]*model.Metrics, 0, len(counters)+len(gauges))
-
-			for name, value := range counters {
-				m := model.Metrics{
-					ID:    name,
-					MType: model.Counter,
-					Delta: &value,
-				}
-				metrics = append(metrics, &m)
-			}
-			for name, value := range gauges {
-				m := model.Metrics{
-					ID:    name,
-					MType: model.Gauge,
-					Value: &value,
-				}
-				metrics = append(metrics, &m)
-			}
-
-			if len(metrics) > 0 {
-				return s.sender.SendMetricsBatch(ctx, s.serverAddress, metrics)
+			err := s.grpcClient.UpdateMetrics(ctx, metricsCopy, s.localIP)
+			if err != nil {
+				log.Printf("Error sending metrics via gRPC: %v. Falling back to HTTP.", err)
+				// Fallback to HTTP if gRPC fails
+				return s.sendMetricsHTTP(ctx, metricsCopy)
 			}
 			return nil
 		})
-	} else {
-		for name, value := range counters {
-			name := name
-			value := value
-			s.workerPool.EnqueueTask(func(ctx context.Context) error {
-				m := model.Metrics{
-					ID:    name,
-					MType: model.Counter,
-					Delta: &value,
-				}
-				return s.sender.SendMetricJSON(ctx, s.serverAddress, &m)
-			})
-		}
-
-		for name, value := range gauges {
-			name := name
-			value := value
-			s.workerPool.EnqueueTask(func(ctx context.Context) error {
-				m := model.Metrics{
-					ID:    name,
-					MType: model.Gauge,
-					Value: &value,
-				}
-				return s.sender.SendMetricJSON(ctx, s.serverAddress, &m)
-			})
-		}
+	} else if len(metrics) > 0 {
+		// Send via HTTP
+		metricsCopy := make([]model.Metrics, len(metrics))
+		copy(metricsCopy, metrics)
+		s.workerPool.EnqueueTask(func(ctx context.Context) error {
+			return s.sendMetricsHTTP(ctx, metricsCopy)
+		})
 	}
 }

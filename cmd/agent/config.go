@@ -14,6 +14,7 @@ type JSONConfig struct {
 	ReportInterval string `json:"report_interval"`
 	PollInterval   string `json:"poll_interval"`
 	CryptoKey      string `json:"crypto_key"`
+	GrpcAddress    string `json:"grpc_address"`
 }
 
 // Config represents the full configuration with all sources
@@ -25,6 +26,7 @@ type Config struct {
 	Key            string `env:"KEY"`
 	RateLimit      int    `env:"RATE_LIMIT"`
 	CryptoKey      string `env:"CRYPTO_KEY"`
+	GrpcAddress    string `env:"GRPC_ADDRESS"`
 
 	// ConfigFile is the path to the configuration file if specified
 	ConfigFile string
@@ -47,6 +49,7 @@ func NewConfig() (*Config, error) {
 		Key:            "",
 		RateLimit:      1,
 		CryptoKey:      "",
+		GrpcAddress:    "",
 	}
 
 	// Register flags with default values
@@ -57,6 +60,7 @@ func NewConfig() (*Config, error) {
 	flag.StringVar(&cfg.Key, "k", "", "Key for signing requests")
 	flag.IntVar(&cfg.RateLimit, "l", 1, "Rate limit for concurrent requests")
 	flag.StringVar(&cfg.CryptoKey, "crypto-key", "", "Path to public key file for encryption")
+	flag.StringVar(&cfg.GrpcAddress, "g", "", "gRPC server address")
 
 	var configFileFlag string
 	flag.StringVar(&configFileFlag, "c", "", "Path to config file")
@@ -91,4 +95,5 @@ func (c *Config) applyJSONConfig(cfg *JSONConfig) {
 	configpkg.ApplyDurationIfDefault(&c.PollInterval, 2, cfg.PollInterval)
 	configpkg.ApplyDurationIfDefault(&c.ReportInterval, 10, cfg.ReportInterval)
 	configpkg.ApplyStringIfDefault(&c.CryptoKey, "", cfg.CryptoKey)
+	configpkg.ApplyStringIfDefault(&c.GrpcAddress, "", cfg.GrpcAddress)
 }

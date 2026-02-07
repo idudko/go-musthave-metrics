@@ -14,11 +14,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"google.golang.org/grpc"
 
 	"github.com/idudko/go-musthave-metrics/internal/audit"
 	"github.com/idudko/go-musthave-metrics/internal/handler"
 	"github.com/idudko/go-musthave-metrics/internal/middleware"
 	"github.com/idudko/go-musthave-metrics/internal/repository"
+	grpcserver "github.com/idudko/go-musthave-metrics/internal/server/grpc"
 	"github.com/idudko/go-musthave-metrics/internal/service"
 )
 
@@ -76,6 +78,7 @@ func newServer(config *Config) (*chi.Mux, repository.Storage, error) {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.StripSlashes)
 	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.TrustedSubnetMiddleware(config.TrustedSubnet))
 	r.Use(middleware.DecryptionMiddleware(config.CryptoKey))
 	r.Use(middleware.HashValidationMiddleware(config.Key))
 	r.Use(middleware.GzipRequestMiddleware)
@@ -158,6 +161,10 @@ func main() {
 		fmt.Printf("Config file: %s\n", cfg.ConfigFile)
 	}
 
+	if cfg.TrustedSubnet != "" {
+		fmt.Printf("Trusted subnet: %s\n", cfg.TrustedSubnet)
+	}
+
 	// Create HTTP server
 	srv := &http.Server{
 		Addr:    cfg.Address,
@@ -170,6 +177,17 @@ func main() {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
+
+	// Start gRPC server if address is specified
+	var grpcSrv *grpc.Server
+	if cfg.GrpcAddress != "" {
+		var err error
+		grpcSrv, err = grpcserver.StartServer(context.Background(), cfg.GrpcAddress, cfg.TrustedSubnet, storage)
+		if err != nil {
+			log.Fatalf("Failed to start gRPC server: %v", err)
+		}
+		fmt.Printf("gRPC server is running on %s\n", cfg.GrpcAddress)
+	}
 
 	// Setup signal notification for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -189,6 +207,13 @@ func main() {
 		log.Printf("HTTP server shutdown error: %v", err)
 	} else {
 		log.Println("HTTP server stopped gracefully")
+	}
+
+	// Shutdown gRPC server if it was started
+	if grpcSrv != nil {
+		log.Println("Shutting down gRPC server...")
+		grpcSrv.GracefulStop()
+		log.Println("gRPC server stopped gracefully")
 	}
 
 	// Save metrics before shutdown (for file storage)
